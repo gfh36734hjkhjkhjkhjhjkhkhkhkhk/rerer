@@ -7,12 +7,12 @@ const mock = (() => {
   const st = { engine_on:false, strategy:'general.bat', games:false, ai:false, tg_on:false, autostart:false, tray:true,
     tg:{host:'127.0.0.1',port:1443,secret:'7f3a9c41e0b25d88f6c1a04e93b7d2aa',link:'tg://proxy?server=127.0.0.1&port=1443&secret=dd7f3a9c41e0b25d88f6c1a04e93b7d2aa'},
     strategies:[['general.bat','Основная','Рекомендуемая, начните с неё'],['general (ALT).bat','ALT','Альтернативная разрезка пакетов'],['general (ALT2).bat','ALT2','Альтернативная разрезка пакетов'],['general (FAKE TLS AUTO).bat','FAKE TLS AUTO','Поддельное TLS-приветствие, часто помогает на мобильном интернете'],['general (SIMPLE FAKE).bat','SIMPLE FAKE','Простые фейковые пакеты']].map(([id,name,desc])=>({id,name,desc})),
-    user_sites:['rutracker.org'], builtin_sites:142, auto_update:true, app_version:'0.3.0', zapret_version:'1.10.3', portable:false, versions:['zapret-discord-youtube 1.10.3 (winws из zapret v72.9)','tg-ws-proxy 1.11.1'] };
+    since:0, user_sites:['rutracker.org','nnmclub.to'], builtin_sites:142, auto_update:true, app_version:'0.4.0', zapret_version:'1.10.3', portable:false, versions:['zapret-discord-youtube 1.10.3 (winws из zapret v72.9)','tg-ws-proxy 1.11.1'] };
   const wait = ms => new Promise(r => setTimeout(r, ms));
   return async (cmd, a = {}) => {
     await wait(300);
     switch (cmd) {
-      case 'set_engine': st.engine_on = a.on; break;
+      case 'set_engine': await wait(a.on ? 1200 : 300); st.engine_on = a.on; st.since = a.on ? Date.now() - 2 * 3600e3 - 14 * 60e3 : 0; break;
       case 'set_strategy': st.strategy = a.id; break;
       case 'set_games': st.games = a.on; break;
       case 'set_ai': st.ai = a.on; break;
@@ -24,10 +24,10 @@ const mock = (() => {
       case 'check_services': await wait(900); return { discord:{ok:st.engine_on,ms:120}, youtube:{ok:st.engine_on,ms:140}, telegram:{ok:st.tg_on,ms:1}, chatgpt:st.ai };
       case 'auto_pick':
         for (const s of st.strategies) { emit('pick-progress',{id:s.id,state:'wait',ms:0}); await wait(400); emit('pick-progress',{id:s.id,state:s.id.includes('ALT2')?'bad':'ok',ms:100+Math.round(Math.random()*150)}); }
-        st.strategy = 'general.bat'; st.engine_on = true; break;
+        st.strategy = 'general.bat'; st.engine_on = true; st.since = Date.now(); break;
       case 'get_log': return '[prism] предпросмотр в браузере';
       case 'set_auto_update': st.auto_update = a.on; break;
-      case 'check_updates': return { app:{current:'0.3.0',latest:'0.3.1',available:true}, zapret:{current:'1.10.3',latest:'1.10.3',available:false} };
+      case 'check_updates': return { app:{current:'0.4.0',latest:'0.4.1',available:true}, zapret:{current:'1.10.3',latest:'1.10.3',available:false} };
       case 'update_zapret': throw 'У вас уже последняя версия обходов';
       case 'update_app': return null;
       case 'open_tg_link': case 'close_window': return null;
@@ -40,9 +40,26 @@ function emit(ev, payload) { (handlers[ev] || []).forEach(f => f({ payload })); 
 const invoke = T ? T.core.invoke : mock;
 const listen = T ? T.event.listen : async (ev, f) => { (handlers[ev] ||= []).push(f); };
 
+// Безель: 60 рисок вокруг ручки, каждая пятая длиннее. При включении загораются спектром по кругу.
+(function drawTicks() {
+  const n = 60, c = 106;
+  let h = '';
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2, mj = i % 5 === 0;
+    const r1 = mj ? 87 : 92, r2 = 99, x = Math.sin(a), y = -Math.cos(a);
+    const f = v => v.toFixed(2);
+    h += `<line class="tick${mj ? ' mj' : ''}" style="--i:${i};--c:hsl(${Math.round(i / n * 360)} 74% 71%)" x1="${f(c + x * r1)}" y1="${f(c + y * r1)}" x2="${f(c + x * r2)}" y2="${f(c + y * r2)}"/>`;
+  }
+  $('#ticks').innerHTML = h;
+})();
+
 let S = null;          // последнее состояние из программы
 let svc = null;        // результаты последней проверки Discord и YouTube
-let busy = false;      // обход включается или выключается
+let checkedAt = 0;     // когда была последняя проверка
+let onSince = 0;       // запасной вариант, если программа не прислала время включения
+let busy = null;       // обход включается или выключается: {text, target}
+let checkGen = 0;      // поколение проверки: старые ответы после переключений не показываем
+const invalidate = () => { checkGen++; svc = null; };
 let picking = false;   // идёт подбор стратегии
 const pick = {};       // результаты подбора по id стратегии
 
@@ -80,9 +97,9 @@ $$('.seg button').forEach(b => b.onclick = () => go(b.dataset.go));
 $('#power').onclick = async () => {
   if (busy || picking || !S) return;
   const on = !S.engine_on;
-  busy = true; svc = null; render(on ? 'Включаю…' : 'Выключаю…', on);
+  busy = { text: on ? 'Включаю…' : 'Выключаю…', target: on }; invalidate(); render();
   try { await call('set_engine', { on }, on ? 'Обход включён' : 'Обход выключен'); } catch {}
-  busy = false; render(); checkSoon();
+  busy = null; render(); checkSoon();
 };
 
 // Остальные переключатели
@@ -91,7 +108,7 @@ const modText = {
   tg: on => on ? 'Прокси для Telegram включён' : 'Прокси для Telegram выключен',
   games: on => on ? 'Режим для игр включён' : 'Режим для игр выключен',
   ai: on => on ? 'Доступ к нейросетям включён' : 'Доступ к нейросетям выключен',
-  autostart: on => on ? 'Prism будет запускаться вместе с Windows' : 'Prism не будет запускаться вместе с Windows',
+  autostart: on => on ? 'Автозапуск включён' : 'Автозапуск выключен',
   tray: on => on ? 'Крестик будет сворачивать в трей' : 'Крестик будет закрывать Prism',
   auto_update: on => on ? 'Автообновление включено' : 'Автообновление выключено',
 };
@@ -138,7 +155,7 @@ function drawStrats() {
     if (e.key) e.preventDefault();
     if (picking) return;
     const s = S.strategies.find(x => x.id === o.dataset.id);
-    svc = null; dlg.close();
+    invalidate(); dlg.close();
     try { await call('set_strategy', { id: s.id }, `Стратегия «${s.name}» ${S.engine_on ? 'включена' : 'выбрана'}`); } catch {}
     checkSoon();
   });
@@ -154,14 +171,14 @@ $('#pickBtn').onclick = async () => {
     const s = S.strategies.find(x => x.id === S.strategy);
     toast(`Подобрана стратегия «${s ? s.name : S.strategy}». Обход включён`);
   } catch {}
-  picking = false; svc = null; render(); checkSoon();
+  picking = false; invalidate(); render(); checkSoon();
 };
 
 // Сайты
 function drawSites() {
   const list = S.user_sites;
-  $('#sites').innerHTML = list.map(s => `<div class="item"><div class="row"><div class="t"><b>${esc(s)}</b></div><button class="x" data-del="${esc(s)}" aria-label="Убрать ${esc(s)}">×</button></div></div>`).join('')
-    || '<div class="item"><div class="row"><div class="t"><span>Здесь пока пусто. Добавьте сайт, который не открывается.</span></div></div></div>';
+  $('#sites').innerHTML = list.map(s => `<div class="row"><span class="av" aria-hidden="true">${esc(s[0] || '')}</span><div class="t"><b>${esc(s)}</b></div><button class="x" data-del="${esc(s)}" aria-label="Убрать ${esc(s)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('')
+    || '<div class="empty">Здесь пока пусто. Добавьте сайт, который не открывается.</div>';
   $('#builtin').textContent = `Ещё ${S.builtin_sites} сайтов уже есть во встроенном списке: Discord, YouTube и другие.`;
   $$('[data-del]').forEach(b => b.onclick = () => call('remove_site', { domain: b.dataset.del }, `${b.dataset.del} убран из списка`).catch(() => {}));
 }
@@ -182,22 +199,49 @@ let checkTimer = null;
 function checkSoon() { clearTimeout(checkTimer); checkTimer = setTimeout(checkServices, 700); }
 async function checkServices() {
   if (picking || busy) return;
-  try { svc = await invoke('check_services'); } catch {}
+  const gen = checkGen, rb = $('#recheck');
+  rb.classList.add('spin'); rb.disabled = true;
+  try {
+    const r = await invoke('check_services');
+    if (gen === checkGen && !busy && !picking) { svc = r; checkedAt = Date.now(); }
+  } catch {}
+  rb.classList.remove('spin'); rb.disabled = false;
   render();
 }
+$('#recheck').onclick = () => { invalidate(); render(); checkServices(); };
 setInterval(() => { if (!document.hidden) checkServices(); }, 60000);
 
 function web(k) {
-  if (!S.engine_on) return ['off', 'Выключено'];
+  if (!S.engine_on) return ['off', 'Выключено', 0];
+  if (picking) return ['wait', 'Проверяю…', 0];
   const x = svc && svc[k];
-  if (!x) return ['wait', 'Проверяю…'];
-  return x.ok ? ['ok', `Работает, ${x.ms} мс`] : ['fail', 'Не открывается'];
+  if (!x) return ['wait', 'Проверяю…', 0];
+  return x.ok ? ['ok', `${x.ms} мс`, x.ms < 150 ? 3 : x.ms < 400 ? 2 : 1] : ['fail', 'Не открывается', 0];
 }
-
-function render(busyText, target) {
+const ago = t => { const m = Math.floor((Date.now() - t) / 60000); return m < 1 ? 'только что' : m < 60 ? `${m} мин назад` : `${Math.floor(m / 60)} ч назад`; };
+function dur(ms) {
+  const m = Math.floor(ms / 60000), h = Math.floor(m / 60);
+  return m < 1 ? 'меньше минуты' : h ? `${h} ч ${m % 60} мин` : `${m} мин`;
+}
+// Время работы и давность проверки обновляются сами, без перерисовки всего окна.
+function drawClock() {
   if (!S) return;
+  const on = S.engine_on && !busy && !picking;
+  const since = S.since || onSince;
+  $('#uptime').textContent = on && since ? `Работает ${dur(Date.now() - since)}` : '';
+  $('#checked').textContent = S.engine_on && checkedAt && !picking ? ago(checkedAt) : '';
+}
+setInterval(drawClock, 15000);
+
+function render() {
+  if (!S) return;
+  const busyText = busy && busy.text, target = busy && busy.target;
   const on = S.engine_on;
+  if (on && !onSince) onSince = Date.now();
+  if (!on) onSince = 0;
   document.body.classList.toggle('on', busyText ? !!target : on);
+  document.body.classList.toggle('busy', !!busyText);
+  document.body.classList.toggle('pick', picking);
   const pw = $('#power');
   pw.setAttribute('aria-checked', busyText ? !!target : on);
   pw.disabled = busy || picking;
@@ -206,26 +250,30 @@ function render(busyText, target) {
   const dc = web('discord'), yt = web('youtube');
   const failed = [['Discord', dc], ['YouTube', yt]].filter(([, x]) => x[0] === 'fail').map(([n]) => n);
   const sub = $('#stateSub');
-  $('#state').textContent = busyText || (on ? 'Обход включён' : 'Обход выключен');
-  sub.className = failed.length && !busyText && !picking ? 'bad' : '';
+  const total = S.strategies.length, done = Object.values(pick).filter(r => r.state !== 'wait').length;
+  $('#state').textContent = busyText || (picking ? 'Подбираю стратегию' : on ? 'Обход включён' : 'Обход выключен');
+  sub.className = 'state-sub' + (failed.length && !busyText && !picking ? ' bad' : '');
   sub.textContent = busyText ? 'Это займёт пару секунд.'
-    : picking ? 'Подбираю стратегию. Это займёт пару минут.'
-    : !on ? 'Включите, чтобы открылись Discord и YouTube.'
+    : picking ? `Проверяю ${Math.min(done + 1, total)} из ${total}. Это займёт пару минут.`
+    : !on ? 'Нажмите, чтобы открылись Discord и YouTube.'
     : failed.length ? `${both(failed)} не ${failed.length > 1 ? 'открываются' : 'открывается'}. Нажмите «Подобрать», чтобы найти рабочую стратегию.`
     : dc[0] === 'wait' || yt[0] === 'wait' ? 'Проверяю Discord и YouTube…'
     : 'Discord и YouTube открываются.';
   for (const [id, x] of [['dc', dc], ['yt', yt]]) {
-    $(`#svc-${id}`).className = 'row svc ' + x[0];
+    const row = $(`#svc-${id}`);
+    row.className = 'row svc ' + x[0];
+    row.querySelector('.bars').className = 'bars' + (x[2] ? ' q' + x[2] : '');
     $(`#st-${id}`).textContent = x[1];
   }
+  $('#recheck').hidden = !on || busyText || picking;
 
   // Стратегия и подбор
   const strat = S.strategies.find(x => x.id === S.strategy);
-  const total = S.strategies.length, done = Object.values(pick).filter(r => r.state !== 'wait').length;
-  $('#stratRow').classList.toggle('picking', picking);
+  const cur = S.strategies.find(x => pick[x.id] && pick[x.id].state === 'wait');
   $('#stratName').textContent = !total ? 'Не найдены. Переустановите Prism'
-    : picking ? `Проверяю ${Math.min(done + 1, total)} из ${total}` : (strat ? strat.name : S.strategy);
-  $('#progBar').style.width = picking ? `${Math.round(done / total * 100)}%` : '0';
+    : picking ? (cur ? `Проверяю «${cur.name}»` : 'Готовлю проверку') : (strat ? strat.name : S.strategy);
+  const lit = picking ? Math.round(done / Math.max(total, 1) * 60) : 0;
+  $$('.tick').forEach((t, i) => t.classList.toggle('lit', i < lit));
   const pb = $('#pickBtn');
   pb.textContent = picking ? 'Подбираю…' : 'Подобрать';
   pb.className = 'btn' + (failed.length && !picking ? ' primary' : '');
@@ -236,18 +284,24 @@ function render(busyText, target) {
   // Модули
   for (const m in modVal) $$(`.sw[data-mod="${m}"]`).forEach(s => { if (!s.disabled) s.setAttribute('aria-checked', modVal[m]()); });
   const tgBad = S.tg_on && svc && svc.telegram && !svc.telegram.ok;
-  $('#tgSub').textContent = !S.tg_on ? 'Прокси на вашем компьютере, работает отдельно от обхода'
+  $('#tgSub').textContent = !S.tg_on ? 'Прокси на вашем компьютере'
     : tgBad ? 'Не запустился. Подробности в журнале в настройках' : `Работает на ${S.tg.host}:${S.tg.port}`;
   $('#tgMore').hidden = !S.tg_on || tgBad;
   if (!S.tg_on) $('#tgKv').hidden = true;
   $('#tgHost').textContent = S.tg.host; $('#tgPort').textContent = S.tg.port; $('#tgSecret').textContent = 'dd' + S.tg.secret;
-  $('#gmSub').textContent = !S.games ? 'Голосовые чаты Discord, онлайн-игры и лаунчеры'
-    : on ? 'Работает для игр, голосовых чатов и лаунчеров' : 'Включится вместе с обходом';
-  $('#aiSub').textContent = S.ai ? 'ChatGPT, Gemini, Claude и другие открыты. Работает, даже когда Prism закрыт'
+  $('#gmSub').textContent = !S.games ? 'Голосовые чаты, онлайн-игры и лаунчеры'
+    : on ? 'Работает для игр и голосовых чатов' : 'Включится вместе с обходом';
+  $('#tgItem').classList.toggle('is-on', S.tg_on && !tgBad);
+  $('#gmItem').classList.toggle('is-on', S.games);
+  $('#aiItem').classList.toggle('is-on', S.ai);
+  $('#asRow').classList.toggle('is-on', S.autostart);
+  $$('.asSub').forEach(el => el.textContent = S.autostart ? 'Обход включится сам при запуске Windows' : 'Включать обход при запуске Windows');
+  $('#aiSub').textContent = S.ai ? 'Работают без VPN, даже когда Prism закрыт'
     : 'ChatGPT, Gemini, Claude и другие без VPN';
 
   drawUpdates();
   drawSites();
+  drawClock();
 }
 
 // Обновления
@@ -259,11 +313,9 @@ function drawUpdates() {
   $('#appUpd').textContent = U && U.app.available ? (S.portable ? 'Скачать' : 'Обновить') : 'Проверить';
   $('#zapUpd').textContent = U && U.zapret.available ? 'Обновить' : 'Проверить';
   const show = !!(U && U.app.available);
-  $('#updBar').hidden = !show;
-  if (show) {
-    $('#updText').textContent = `Вышла Prism ${U.app.latest}`;
-    $('#updBarBtn').textContent = S.portable ? 'Скачать' : 'Обновить';
-  }
+  const ub = $('#updBar');
+  if (!ub.disabled) ub.hidden = !show;
+  if (show && !ub.disabled) $('#updText').textContent = `${S.portable ? 'Скачать' : 'Обновить до'} ${U.app.latest}`;
 }
 async function checkUpdates(quiet) {
   try { U = await invoke('check_updates'); drawUpdates(); if (!quiet && !U.app.available && !U.zapret.available) toast('Всё обновлено'); }
@@ -271,19 +323,20 @@ async function checkUpdates(quiet) {
 }
 async function updateApp(btn) {
   if (!U || !U.app.available) return checkUpdates(false);
-  btn.disabled = true; btn.textContent = S.portable ? 'Открываю…' : 'Скачиваю…';
+  const label = btn.id === 'updBar' ? $('#updText') : btn;
+  btn.disabled = true; label.textContent = S.portable ? 'Открываю…' : 'Скачиваю…';
   try { await invoke('update_app'); toast(S.portable ? 'Скачайте новую версию со страницы релиза' : 'Запускаю установщик'); }
   catch (e) { toast(String(e)); }
   btn.disabled = false; drawUpdates();
 }
 $('#appUpd').onclick = e => updateApp(e.currentTarget);
-$('#updBarBtn').onclick = e => updateApp(e.currentTarget);
+$('#updBar').onclick = e => updateApp(e.currentTarget);
 $('#zapUpd').onclick = async e => {
   const b = e.currentTarget;
   if (!U || !U.zapret.available) return checkUpdates(false);
   b.disabled = true; b.textContent = 'Обновляю…';
   try { await call('update_zapret', {}, 'Обходы обновлены'); U.zapret.available = false; U.zapret.current = S.zapret_version; } catch {}
-  b.disabled = false; drawUpdates(); svc = null; checkSoon();
+  b.disabled = false; drawUpdates(); invalidate(); checkSoon();
 };
 listen('updates', e => { U = e.payload; drawUpdates(); });
 listen('zapret-updated', e => toast(`Обходы обновлены до версии ${e.payload}`));

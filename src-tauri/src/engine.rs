@@ -174,10 +174,13 @@ pub fn kill_stray() {
 #[derive(Default)]
 pub struct Engine {
     child: Option<Child>,
+    /// Когда обход включился. Перезапуск со сменой стратегии время не сбрасывает.
+    since: Option<std::time::SystemTime>,
 }
 
 impl Engine {
     pub fn start(&mut self, paths: &ZapretPaths, strategy: &str, games: bool, log: &Log) -> Result<(), String> {
+        let keep = if self.alive() { self.since } else { None };
         self.stop();
         kill_stray();
         ensure_user_lists(paths);
@@ -204,6 +207,7 @@ impl Engine {
             log.pipe("winws", err);
         }
         self.child = Some(child);
+        self.since = Some(keep.unwrap_or_else(std::time::SystemTime::now));
         Ok(())
     }
 
@@ -215,11 +219,23 @@ impl Engine {
         }
     }
 
+    /// Время включения в миллисекундах с 1970 года или 0, если обход не работает.
+    pub fn since_ms(&mut self) -> u64 {
+        if !self.alive() {
+            return 0;
+        }
+        self.since
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
     pub fn stop(&mut self) {
         if let Some(mut c) = self.child.take() {
             let _ = c.kill();
             let _ = c.wait();
         }
+        self.since = None;
     }
 }
 

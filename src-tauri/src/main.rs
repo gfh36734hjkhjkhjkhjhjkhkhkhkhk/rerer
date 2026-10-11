@@ -59,6 +59,8 @@ struct TgInfo {
 #[derive(Serialize)]
 struct AppState {
     engine_on: bool,
+    /// Когда включился обход, миллисекунды с 1970 года (0 — выключен).
+    since: u64,
     strategy: String,
     strategies: Vec<Strategy>,
     games: bool,
@@ -81,10 +83,12 @@ type R<T> = Result<T, String>;
 fn snapshot(p: &Prism) -> AppState {
     let mut i = p.inner.lock().unwrap();
     let engine_on = i.engine.alive();
+    let since = i.engine.since_ms();
     let tg_on = i.proxy.alive();
     let s = &i.settings;
     AppState {
         engine_on,
+        since,
         strategy: s.strategy.clone(),
         strategies: engine::list_strategies(&p.zapret),
         games: s.games,
@@ -505,23 +509,103 @@ async fn auto_pick(app: AppHandle, p: State<'_, Prism>) -> R<AppState> {
     Ok(snapshot(&p))
 }
 
-fn set_autostart_task(on: bool) -> R<()> {
-    if on {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let tr = format!("\"{}\" --autostart", exe.display());
-        let ok = run_quiet("schtasks", &["/Create", "/F", "/TN", TASK_NAME, "/TR", &tr, "/SC", "ONLOGON", "/RL", "HIGHEST"]);
-        if !ok {
-            return Err("Не удалось включить автозапуск".into());
-        }
-    } else {
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+/// Задание планировщика для автозапуска: при входе в Windows, с правами администратора и без окна UAC.
+/// В отличие от простого `schtasks /SC ONLOGON` оно запускается и от батареи,
+/// не останавливается через 3 дня и работает с обычным приоритетом.
+fn task_xml(exe: &std::path::Path) -> String {
+    let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
+        (Ok(d), Ok(u)) if !d.is_empty() && !u.is_empty() => format!("{d}\\{u}"),
+        (_, Ok(u)) => u,
+        _ => String::new(),
+    };
+    let user = if user.is_empty() { String::new() } else { format!("<UserId>{}</UserId>", xml_escape(&user)) };
+    let dir = exe.parent().map(|d| d.display().to_string()).unwrap_or_default();
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Запускает Prism при входе в Windows и сразу включает обход</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      {user}
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      {user}
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{cmd}</Command>
+      <Arguments>--autostart</Arguments>
+      <WorkingDirectory>{dir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"#,
+        user = user,
+        cmd = xml_escape(&exe.display().to_string()),
+        dir = xml_escape(&dir),
+    )
+}
+
+fn set_autostart_task(on: bool, log: &Log) -> R<()> {
+    if !on {
         run_quiet("schtasks", &["/Delete", "/F", "/TN", TASK_NAME]);
+        log.push("[prism] автозапуск выключен");
+        return Ok(());
     }
-    Ok(())
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // schtasks читает XML в UTF-16 с меткой порядка байтов, как его сохраняет сам планировщик.
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in task_xml(&exe).encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    let file = std::env::temp_dir().join("prism-autostart.xml");
+    let file_s = file.display().to_string();
+    let ok = std::fs::write(&file, &bytes).is_ok()
+        && run_quiet("schtasks", &["/Create", "/F", "/TN", TASK_NAME, "/XML", &file_s]);
+    let _ = std::fs::remove_file(&file);
+    if ok {
+        log.push("[prism] автозапуск включён: Prism запустится при входе в Windows и включит обход");
+        return Ok(());
+    }
+    // Запасной вариант: простое задание при входе в систему.
+    let tr = format!("\"{}\" --autostart", exe.display());
+    if run_quiet("schtasks", &["/Create", "/F", "/TN", TASK_NAME, "/TR", &tr, "/SC", "ONLOGON", "/RL", "HIGHEST"]) {
+        log.push("[prism] автозапуск включён (простое задание планировщика)");
+        return Ok(());
+    }
+    Err("Не удалось включить автозапуск. Подробности в журнале.".into())
 }
 
 #[tauri::command]
 async fn set_autostart(p: State<'_, Prism>, on: bool) -> R<AppState> {
-    set_autostart_task(on)?;
+    set_autostart_task(on, &p.log)?;
     {
         let mut i = p.inner.lock().unwrap();
         i.settings.autostart = on;
@@ -590,8 +674,16 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     if settings.tg_secret.len() != 32 {
         settings.tg_secret = tgproxy::new_secret();
     }
+    // Запуск при входе в Windows: всё должно заработать сразу, поэтому обход включается,
+    // даже если в прошлый раз его выключили вручную.
+    let autostart = std::env::args().any(|a| a == "--autostart");
+    if autostart {
+        settings.engine_on = true;
+        log.push("[prism] запуск вместе с Windows");
+    }
     settings.save(&settings_file);
     let restore = (settings.engine_on, settings.tg_on);
+    let keep_task = settings.autostart;
 
     app.manage(Prism {
         inner: Mutex::new(Inner { settings, engine: Engine::default(), proxy: Proxy::default(), busy: false }),
@@ -626,10 +718,27 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         })
         .build(app)?;
 
-    let autostart = std::env::args().any(|a| a == "--autostart");
     if !autostart {
         show_main(app.handle());
     }
+
+    // Подсказка у значка в трее: видно, включён ли обход, даже когда окно скрыто.
+    let tip = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let mut last: Option<bool> = None;
+        loop {
+            let on = tip.state::<Prism>().inner.lock().unwrap().engine.alive();
+            if last != Some(on) {
+                if let Some(t) = tip.tray_by_id("main") {
+                    let text = if on { "Prism: обход включён" } else { "Prism: обход выключен" };
+                    if t.set_tooltip(Some(text)).is_ok() {
+                        last = Some(on);
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    });
 
     // Вернуть то, что было включено в прошлый раз.
     let handle = app.handle().clone();
@@ -648,6 +757,14 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         let _ = handle.emit("state-changed", ());
+
+        // Обновить задание автозапуска: путь к программе мог измениться,
+        // а задания из старых версий не запускались от батареи.
+        if keep_task {
+            if let Err(e) = set_autostart_task(true, &p.log) {
+                p.log.push(format!("[prism] {e}"));
+            }
+        }
 
         // Фоновые обновления через несколько секунд после запуска.
         tokio::time::sleep(Duration::from_secs(8)).await;
