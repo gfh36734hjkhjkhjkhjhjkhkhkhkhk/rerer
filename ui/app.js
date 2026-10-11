@@ -7,7 +7,7 @@ const mock = (() => {
   const st = { engine_on:false, strategy:'general.bat', games:false, ai:false, tg_on:false, autostart:false, tray:true,
     tg:{host:'127.0.0.1',port:1443,secret:'7f3a9c41e0b25d88f6c1a04e93b7d2aa',link:'tg://proxy?server=127.0.0.1&port=1443&secret=dd7f3a9c41e0b25d88f6c1a04e93b7d2aa'},
     strategies:[['general.bat','Основная','Рекомендуемая, начните с неё'],['general (ALT).bat','ALT','Альтернативная разрезка пакетов'],['general (ALT2).bat','ALT2','Альтернативная разрезка пакетов'],['general (FAKE TLS AUTO).bat','FAKE TLS AUTO','Поддельное TLS-приветствие, часто помогает на мобильном интернете'],['general (SIMPLE FAKE).bat','SIMPLE FAKE','Простые фейковые пакеты']].map(([id,name,desc])=>({id,name,desc})),
-    user_sites:['rutracker.org'], builtin_sites:142, auto_update:true, app_version:'0.2.1', zapret_version:'1.10.3', portable:false, versions:['zapret-discord-youtube 1.10.3 (winws из zapret v72.9)','tg-ws-proxy 1.11.1'] };
+    user_sites:['rutracker.org'], builtin_sites:142, auto_update:true, app_version:'0.3.0', zapret_version:'1.10.3', portable:false, versions:['zapret-discord-youtube 1.10.3 (winws из zapret v72.9)','tg-ws-proxy 1.11.1'] };
   const wait = ms => new Promise(r => setTimeout(r, ms));
   return async (cmd, a = {}) => {
     await wait(300);
@@ -27,7 +27,7 @@ const mock = (() => {
         st.strategy = 'general.bat'; st.engine_on = true; break;
       case 'get_log': return '[prism] предпросмотр в браузере';
       case 'set_auto_update': st.auto_update = a.on; break;
-      case 'check_updates': return { app:{current:'0.2.1',latest:'0.3.0',available:true}, zapret:{current:'1.10.3',latest:'1.10.3',available:false} };
+      case 'check_updates': return { app:{current:'0.3.0',latest:'0.3.1',available:true}, zapret:{current:'1.10.3',latest:'1.10.3',available:false} };
       case 'update_zapret': throw 'У вас уже последняя версия обходов';
       case 'update_app': return null;
       case 'open_tg_link': case 'close_window': return null;
@@ -41,14 +41,14 @@ const invoke = T ? T.core.invoke : mock;
 const listen = T ? T.event.listen : async (ev, f) => { (handlers[ev] ||= []).push(f); };
 
 let S = null;          // последнее состояние из программы
-let svc = null;        // результаты последней проверки сервисов
+let svc = null;        // результаты последней проверки Discord и YouTube
 let busy = false;      // обход включается или выключается
 let picking = false;   // идёт подбор стратегии
 const pick = {};       // результаты подбора по id стратегии
-const RAYS = ['yt', 'games', 'ai', 'tg', 'dc'];
 
 const toast = t => { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2800); };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+const both = a => a.length > 1 ? a.slice(0, -1).join(', ') + ' и ' + a[a.length - 1] : a[0];
 
 async function call(cmd, args, okText) {
   try {
@@ -70,36 +70,22 @@ $('#wClose').onclick = () => invoke('close_window');
 
 // Разделы
 function go(page) {
-  $$('.nav').forEach(n => n.toggleAttribute('aria-current', n.dataset.go === page));
-  $$('.nav[aria-current]').forEach(n => n.setAttribute('aria-current', 'page'));
+  $$('.seg button').forEach(b => b.dataset.go === page ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
   $$('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + page));
   if (page === 'set') loadLog();
-  if (page === 'home') fit();
 }
-$$('.nav').forEach(b => b.onclick = () => go(b.dataset.go));
+$$('.seg button').forEach(b => b.onclick = () => go(b.dataset.go));
 
-// Схема на главной подстраивается под размер окна
-function fit() {
-  const home = $('#p-home');
-  if (!home.classList.contains('on')) return;
-  const k = Math.max(0.6, Math.min(1.3, (home.clientWidth - 80) / 1000, (home.clientHeight - 60) / 420));
-  home.style.setProperty('--k', k.toFixed(3));
-}
-addEventListener('resize', fit);
-
-// Включение обхода: кнопка и сама призма
-async function toggleEngine() {
+// Главный переключатель
+$('#power').onclick = async () => {
   if (busy || picking || !S) return;
   const on = !S.engine_on;
-  busy = true; svc = null; render(on ? 'Включаю…' : 'Выключаю…');
+  busy = true; svc = null; render(on ? 'Включаю…' : 'Выключаю…', on);
   try { await call('set_engine', { on }, on ? 'Обход включён' : 'Обход выключен'); } catch {}
   busy = false; render(); checkSoon();
-}
-$('#orb').onclick = toggleEngine;
-$('#power').onclick = toggleEngine;
-$('#pickHome').onclick = () => { go('strat'); startPick(); };
+};
 
-// Переключатели
+// Остальные переключатели
 const modCmd = { tg:'set_tg', games:'set_games', ai:'set_ai', autostart:'set_autostart', tray:'set_tray', auto_update:'set_auto_update' };
 const modText = {
   tg: on => on ? 'Прокси для Telegram включён' : 'Прокси для Telegram выключен',
@@ -113,26 +99,31 @@ const modVal = { tg: () => S.tg_on, games: () => S.games, ai: () => S.ai, autost
 $$('.sw[data-mod]').forEach(sw => sw.onclick = async () => {
   if (!S) return;
   const m = sw.dataset.mod, on = !modVal[m]();
-  const group = $$(`.sw[data-mod="${m}"]`);
-  group.forEach(g => { g.disabled = true; g.setAttribute('aria-checked', on); });
+  sw.disabled = true; sw.setAttribute('aria-checked', on);
   if (m === 'tg' && svc) delete svc.telegram;
   try { await call(modCmd[m], { on }, modText[m](on)); } catch {}
-  group.forEach(g => g.disabled = false); render();
-  if (m === 'tg' || m === 'ai') checkSoon();
+  sw.disabled = false; render();
+  if (m === 'tg') checkSoon();
 });
 
 // Telegram
 $$('[data-copy]').forEach(b => b.onclick = () => { navigator.clipboard.writeText($('#' + b.dataset.copy).textContent); toast('Скопировано'); });
 $('#tgCopyLink').onclick = () => { navigator.clipboard.writeText(S.tg.link); toast('Ссылка на прокси скопирована'); };
 $('#tgOpen').onclick = async () => {
-  try {
-    if (!S.tg_on) await call('set_tg', { on: true });
-    await invoke('open_tg_link');
-    toast('Telegram предложит подключить прокси. Нажмите «Подключить»');
-  } catch {}
+  try { await invoke('open_tg_link'); toast('Telegram предложит подключить прокси. Нажмите «Подключить»'); }
+  catch (e) { toast(String(e)); }
+};
+$('#tgData').onclick = e => {
+  const kv = $('#tgKv'), open = kv.hidden;
+  kv.hidden = !open; e.currentTarget.setAttribute('aria-expanded', open);
+  e.currentTarget.textContent = open ? 'Скрыть данные' : 'Данные для ручной настройки';
 };
 
-// Стратегии
+// Стратегии: подбор на главной, ручной выбор в отдельном окне
+const dlg = $('#stratDlg');
+$('#stratOpen').onclick = () => { drawStrats(); dlg.showModal(); };
+$('#dlgClose').onclick = () => dlg.close();
+dlg.onclick = e => { if (e.target === dlg) dlg.close(); };
 function drawStrats() {
   $('#strats').innerHTML = S.strategies.map(s => {
     const r = pick[s.id];
@@ -140,38 +131,37 @@ function drawStrats() {
       : r.state === 'ok' ? `<span class="res ok">${r.ms} мс</span>`
       : r.state === 'part' ? '<span class="res">Частично</span>' : '<span class="res bad">Не работает</span>';
     const sel = s.id === S.strategy;
-    return `<div class="row pick ${sel ? 'sel' : ''}" data-id="${esc(s.id)}" role="radio" tabindex="0" aria-checked="${sel}"><span class="radio"></span><div class="t"><b>${esc(s.name)}</b><span>${esc(s.desc)}</span></div>${res}</div>`;
-  }).join('') || '<div class="row"><div class="t"><span class="res bad">Стратегии не найдены. Переустановите Prism.</span></div></div>';
-  $$('#strats .row[data-id]').forEach(r => r.onclick = r.onkeydown = async e => {
+    return `<div class="opt ${sel ? 'sel' : ''}" data-id="${esc(s.id)}" role="radio" tabindex="0" aria-checked="${sel}"><span class="radio"></span><div class="t"><b>${esc(s.name)}</b><span>${esc(s.desc)}</span></div>${res}</div>`;
+  }).join('') || '<p class="dlg-sub">Стратегии не найдены. Переустановите Prism.</p>';
+  $$('#strats .opt').forEach(o => o.onclick = o.onkeydown = async e => {
     if (e.key && e.key !== 'Enter' && e.key !== ' ') return;
     if (e.key) e.preventDefault();
     if (picking) return;
-    const s = S.strategies.find(x => x.id === r.dataset.id);
-    svc = null;
+    const s = S.strategies.find(x => x.id === o.dataset.id);
+    svc = null; dlg.close();
     try { await call('set_strategy', { id: s.id }, `Стратегия «${s.name}» ${S.engine_on ? 'включена' : 'выбрана'}`); } catch {}
     checkSoon();
   });
 }
-listen('pick-progress', e => { pick[e.payload.id] = e.payload; drawStrats(); });
-async function startPick() {
-  if (picking || busy) return;
-  picking = true; const b = $('#auto'); b.disabled = true; b.textContent = 'Проверяю стратегии…'; render();
+listen('pick-progress', e => { pick[e.payload.id] = e.payload; render(); });
+$('#pickBtn').onclick = async () => {
+  if (picking || busy || !S) return;
+  picking = true;
   for (const k in pick) delete pick[k];
+  render();
   try {
     await call('auto_pick');
     const s = S.strategies.find(x => x.id === S.strategy);
     toast(`Подобрана стратегия «${s ? s.name : S.strategy}». Обход включён`);
   } catch {}
-  picking = false; svc = null; b.disabled = false; b.textContent = 'Подобрать автоматически'; render(); checkSoon();
-}
-$('#auto').onclick = startPick;
+  picking = false; svc = null; render(); checkSoon();
+};
 
 // Сайты
 function drawSites() {
   const list = S.user_sites;
-  $('#sites').innerHTML = list.map(s => `<div class="row"><div class="t"><b>${esc(s)}</b></div><button class="x" data-del="${esc(s)}" aria-label="Убрать ${esc(s)}">×</button></div>`).join('')
-    || '<div class="row"><div class="t"><span>Здесь пока пусто. Добавьте сайт, который не открывается.</span></div></div>';
-  $('#sitesCount').textContent = list.length ? `Ваши сайты: ${list.length}` : 'Ваши сайты';
+  $('#sites').innerHTML = list.map(s => `<div class="item"><div class="row"><div class="t"><b>${esc(s)}</b></div><button class="x" data-del="${esc(s)}" aria-label="Убрать ${esc(s)}">×</button></div></div>`).join('')
+    || '<div class="item"><div class="row"><div class="t"><span>Здесь пока пусто. Добавьте сайт, который не открывается.</span></div></div></div>';
   $('#builtin').textContent = `Ещё ${S.builtin_sites} сайтов уже есть во встроенном списке: Discord, YouTube и другие.`;
   $$('[data-del]').forEach(b => b.onclick = () => call('remove_site', { domain: b.dataset.del }, `${b.dataset.del} убран из списка`).catch(() => {}));
 }
@@ -185,8 +175,9 @@ $('#addForm').onsubmit = async e => {
 // Журнал
 async function loadLog() { try { $('#log').textContent = (await invoke('get_log')) || 'Пока пусто'; } catch {} }
 $('#logRefresh').onclick = loadLog;
+$('#logCopy').onclick = () => { navigator.clipboard.writeText($('#log').textContent); toast('Журнал скопирован'); };
 
-// Проверка сервисов
+// Проверка Discord и YouTube
 let checkTimer = null;
 function checkSoon() { clearTimeout(checkTimer); checkTimer = setTimeout(checkServices, 700); }
 async function checkServices() {
@@ -196,67 +187,67 @@ async function checkServices() {
 }
 setInterval(() => { if (!document.hidden) checkServices(); }, 60000);
 
-// Состояние каждого луча: [вид, подпись]
-function rays() {
-  const on = S.engine_on;
-  const web = k => {
-    if (!on) return ['off', 'Выключено'];
-    const x = svc && svc[k];
-    if (!x) return ['wait', 'Проверяю…'];
-    return x.ok ? ['on', `Работает, ${x.ms} мс`] : ['fail', 'Не открывается'];
-  };
-  return {
-    yt: web('youtube'),
-    dc: web('discord'),
-    games: !S.games ? ['off', 'Выключено'] : on ? ['on', 'Включено'] : ['off', 'Включится с обходом'],
-    ai: S.ai ? ['on', 'Открыты'] : ['off', 'Выключено'],
-    tg: !S.tg_on ? ['off', 'Выключено'] : svc && svc.telegram && !svc.telegram.ok ? ['fail', 'Не запустился'] : ['on', 'Прокси работает'],
-  };
+function web(k) {
+  if (!S.engine_on) return ['off', 'Выключено'];
+  const x = svc && svc[k];
+  if (!x) return ['wait', 'Проверяю…'];
+  return x.ok ? ['ok', `Работает, ${x.ms} мс`] : ['fail', 'Не открывается'];
 }
 
-function render(busyText) {
+function render(busyText, target) {
   if (!S) return;
-  const on = S.engine_on, strat = S.strategies.find(x => x.id === S.strategy);
-  const scene = $('#scene');
-  scene.classList.toggle('on', on && !busyText);
-  scene.classList.toggle('busy', !!busyText);
-  $('#state').textContent = busyText || (on ? 'Обход работает' : 'Обход выключен');
-  $('#stateSub').textContent = on
-    ? `Стратегия «${strat ? strat.name : S.strategy}». Если что-то не открывается, подберите другую.`
-    : 'Включите обход, чтобы открылись Discord и YouTube.';
+  const on = S.engine_on;
+  document.body.classList.toggle('on', busyText ? !!target : on);
   const pw = $('#power');
-  pw.textContent = on ? 'Выключить обход' : 'Включить обход';
-  pw.classList.toggle('primary', !on);
-  pw.disabled = $('#orb').disabled = busy || picking;
-  $('#pickHome').disabled = busy || picking;
-  $('#orb').setAttribute('aria-pressed', on);
-  $('#orb').setAttribute('aria-label', on ? 'Выключить обход' : 'Включить обход');
+  pw.setAttribute('aria-checked', busyText ? !!target : on);
+  pw.disabled = busy || picking;
 
-  const R = rays(); let lit = false;
-  for (const k of RAYS) {
-    const [st, text] = R[k];
-    const g = $(`.ray[data-r="${k}"]`);
-    g.classList.remove('on', 'wait', 'fail');
-    if (st !== 'off') { g.classList.add(st); lit = true; }
-    $(`.lbl[data-r="${k}"]`).className = 'lbl ' + st;
-    $(`#st-${k}`).textContent = text;
+  // Состояние и подсказка
+  const dc = web('discord'), yt = web('youtube');
+  const failed = [['Discord', dc], ['YouTube', yt]].filter(([, x]) => x[0] === 'fail').map(([n]) => n);
+  const sub = $('#stateSub');
+  $('#state').textContent = busyText || (on ? 'Обход включён' : 'Обход выключен');
+  sub.className = failed.length && !busyText && !picking ? 'bad' : '';
+  sub.textContent = busyText ? 'Это займёт пару секунд.'
+    : picking ? 'Подбираю стратегию. Это займёт пару минут.'
+    : !on ? 'Включите, чтобы открылись Discord и YouTube.'
+    : failed.length ? `${both(failed)} не ${failed.length > 1 ? 'открываются' : 'открывается'}. Нажмите «Подобрать», чтобы найти рабочую стратегию.`
+    : dc[0] === 'wait' || yt[0] === 'wait' ? 'Проверяю Discord и YouTube…'
+    : 'Discord и YouTube открываются.';
+  for (const [id, x] of [['dc', dc], ['yt', yt]]) {
+    $(`#svc-${id}`).className = 'row svc ' + x[0];
+    $(`#st-${id}`).textContent = x[1];
   }
-  scene.classList.toggle('lit', lit && !busyText);
 
+  // Стратегия и подбор
+  const strat = S.strategies.find(x => x.id === S.strategy);
+  const total = S.strategies.length, done = Object.values(pick).filter(r => r.state !== 'wait').length;
+  $('#stratRow').classList.toggle('picking', picking);
+  $('#stratName').textContent = !total ? 'Не найдены. Переустановите Prism'
+    : picking ? `Проверяю ${Math.min(done + 1, total)} из ${total}` : (strat ? strat.name : S.strategy);
+  $('#progBar').style.width = picking ? `${Math.round(done / total * 100)}%` : '0';
+  const pb = $('#pickBtn');
+  pb.textContent = picking ? 'Подбираю…' : 'Подобрать';
+  pb.className = 'btn' + (failed.length && !picking ? ' primary' : '');
+  pb.disabled = picking || busy || !total;
+  $('#stratOpen').disabled = picking || !total;
+  if (dlg.open) drawStrats();
+
+  // Модули
   for (const m in modVal) $$(`.sw[data-mod="${m}"]`).forEach(s => { if (!s.disabled) s.setAttribute('aria-checked', modVal[m]()); });
-  $('#d-tg').classList.toggle('on', S.tg_on);
-  $('#d-games').classList.toggle('on', S.games);
-  $('#d-ai').classList.toggle('on', S.ai);
-  $('#r-tg').classList.toggle('on', R.tg[0] === 'on');
-  $('#r-games').classList.toggle('on', R.games[0] === 'on');
-  $('#r-ai').classList.toggle('on', S.ai);
-  $('#tgState').textContent = S.tg_on ? `Работает на ${S.tg.host}:${S.tg.port}` : 'Выключен';
+  const tgBad = S.tg_on && svc && svc.telegram && !svc.telegram.ok;
+  $('#tgSub').textContent = !S.tg_on ? 'Прокси на вашем компьютере, работает отдельно от обхода'
+    : tgBad ? 'Не запустился. Подробности в журнале в настройках' : `Работает на ${S.tg.host}:${S.tg.port}`;
+  $('#tgMore').hidden = !S.tg_on || tgBad;
+  if (!S.tg_on) $('#tgKv').hidden = true;
   $('#tgHost').textContent = S.tg.host; $('#tgPort').textContent = S.tg.port; $('#tgSecret').textContent = 'dd' + S.tg.secret;
-  $('#gmState').textContent = !S.games ? 'Выключен' : on ? 'Работает' : 'Включится вместе с обходом';
-  $('#aiState').textContent = S.ai ? 'Включён' : 'Выключен';
-  $$('#aiList .res').forEach(b => { b.className = 'res' + (S.ai ? ' ok' : ''); b.textContent = S.ai ? 'Открыт' : 'Выключено'; });
+  $('#gmSub').textContent = !S.games ? 'Голосовые чаты Discord, онлайн-игры и лаунчеры'
+    : on ? 'Работает для игр, голосовых чатов и лаунчеров' : 'Включится вместе с обходом';
+  $('#aiSub').textContent = S.ai ? 'ChatGPT, Gemini, Claude и другие открыты. Работает, даже когда Prism закрыт'
+    : 'ChatGPT, Gemini, Claude и другие без VPN';
+
   drawUpdates();
-  drawStrats(); drawSites();
+  drawSites();
 }
 
 // Обновления
@@ -267,8 +258,8 @@ function drawUpdates() {
   $('#zapVer').textContent = `Версия ${S.zapret_version || 'неизвестна'}` + (U && U.zapret.available ? `. Доступна ${U.zapret.latest}` : U ? '. Последняя версия' : '');
   $('#appUpd').textContent = U && U.app.available ? (S.portable ? 'Скачать' : 'Обновить') : 'Проверить';
   $('#zapUpd').textContent = U && U.zapret.available ? 'Обновить' : 'Проверить';
-  const bar = $('#updBar'), show = !!(U && U.app.available);
-  bar.hidden = !show;
+  const show = !!(U && U.app.available);
+  $('#updBar').hidden = !show;
   if (show) {
     $('#updText').textContent = `Вышла Prism ${U.app.latest}`;
     $('#updBarBtn').textContent = S.portable ? 'Скачать' : 'Обновить';
@@ -298,5 +289,4 @@ listen('updates', e => { U = e.payload; drawUpdates(); });
 listen('zapret-updated', e => toast(`Обходы обновлены до версии ${e.payload}`));
 
 listen('state-changed', () => refresh().then(checkSoon));
-fit();
 refresh().then(checkSoon);

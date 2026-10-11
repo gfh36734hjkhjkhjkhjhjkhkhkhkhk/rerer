@@ -1,36 +1,55 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Prism",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "identifier": "io.github.lucudar.prism",
-  "build": { "frontendDist": "../ui" },
+  "build": {
+    "frontendDist": "../ui"
+  },
   "app": {
     "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
         "title": "Prism",
-        "width": 1080,
-        "height": 700,
-        "minWidth": 860,
-        "minHeight": 600,
+        "width": 780,
+        "height": 680,
+        "minWidth": 640,
+        "minHeight": 560,
         "decorations": false,
         "shadow": true,
         "center": true,
         "visible": false
       }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "publisher": "lucudar",
     "shortDescription": "Обход блокировок и прокси Telegram",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
-    "resources": ["resources/**/*"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/**/*"
+    ],
     "windows": {
-      "nsis": { "installMode": "perMachine", "languages": ["Russian", "English"] }
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": [
+          "Russian",
+          "English"
+        ]
+      }
     }
   }
 }
