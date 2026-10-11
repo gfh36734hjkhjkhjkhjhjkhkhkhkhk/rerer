@@ -1,0 +1,533 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod engine;
+mod hosts;
+mod probe;
+mod settings;
+mod tgproxy;
+mod util;
+
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::Duration;
+
+use serde::Serialize;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
+
+use engine::{Engine, Strategy, ZapretPaths};
+use settings::Settings;
+use tgproxy::Proxy;
+use util::{run_quiet, Log};
+
+const ZAPRET_VERSION: &str = "zapret-discord-youtube 1.10.3 (winws из zapret v72.9)";
+const TG_VERSION: &str = "tg-ws-proxy 1.11.1";
+const TASK_NAME: &str = "Prism";
+
+struct Inner {
+    settings: Settings,
+    engine: Engine,
+    proxy: Proxy,
+    busy: bool,
+}
+
+struct Prism {
+    inner: Mutex<Inner>,
+    log: Log,
+    zapret: ZapretPaths,
+    tg_exe: PathBuf,
+    settings_file: PathBuf,
+    hosts_cache: PathBuf,
+}
+
+impl Prism {
+    fn save(&self, i: &Inner) {
+        i.settings.save(&self.settings_file);
+    }
+}
+
+#[derive(Serialize)]
+struct TgInfo {
+    host: &'static str,
+    port: u16,
+    secret: String,
+    link: String,
+}
+
+#[derive(Serialize)]
+struct AppState {
+    engine_on: bool,
+    strategy: String,
+    strategies: Vec<Strategy>,
+    games: bool,
+    ai: bool,
+    tg_on: bool,
+    tg: TgInfo,
+    autostart: bool,
+    tray: bool,
+    user_sites: Vec<String>,
+    builtin_sites: usize,
+    versions: Vec<&'static str>,
+}
+
+type R<T> = Result<T, String>;
+
+fn snapshot(p: &Prism) -> AppState {
+    let mut i = p.inner.lock().unwrap();
+    let engine_on = i.engine.alive();
+    let tg_on = i.proxy.alive();
+    let s = &i.settings;
+    AppState {
+        engine_on,
+        strategy: s.strategy.clone(),
+        strategies: engine::list_strategies(&p.zapret),
+        games: s.games,
+        ai: s.ai,
+        tg_on,
+        tg: TgInfo { host: tgproxy::HOST, port: s.tg_port, secret: s.tg_secret.clone(), link: tgproxy::link(s.tg_port, &s.tg_secret) },
+        autostart: s.autostart,
+        tray: s.tray,
+        user_sites: read_user_sites(&p.zapret),
+        builtin_sites: count_lines(&p.zapret.lists().join("list-general.txt")),
+        versions: vec![ZAPRET_VERSION, TG_VERSION],
+    }
+}
+
+fn count_lines(path: &std::path::Path) -> usize {
+    std::fs::read_to_string(path)
+        .map(|t| t.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#')).count())
+        .unwrap_or(0)
+}
+
+const PLACEHOLDER: &str = "domain.example.abc";
+
+fn read_user_sites(z: &ZapretPaths) -> Vec<String> {
+    std::fs::read_to_string(z.user_list())
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && l != PLACEHOLDER)
+        .collect()
+}
+
+fn write_user_sites(z: &ZapretPaths, sites: &[String]) -> R<()> {
+    let mut body = String::from("# Never leave this file empty\r\n");
+    body.push_str(PLACEHOLDER);
+    body.push_str("\r\n");
+    for s in sites {
+        body.push_str(s);
+        body.push_str("\r\n");
+    }
+    std::fs::write(z.user_list(), body).map_err(|e| format!("Не удалось сохранить список: {e}"))
+}
+
+/// Запустить движок и убедиться, что он не упал сразу.
+async fn start_engine(p: &Prism) -> R<()> {
+    {
+        let mut i = p.inner.lock().unwrap();
+        let (strategy, games) = (i.settings.strategy.clone(), i.settings.games);
+        i.engine.start(&p.zapret, &strategy, games, &p.log)?;
+    }
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let mut i = p.inner.lock().unwrap();
+    if !i.engine.alive() {
+        i.engine.stop();
+        return Err("Обход не запустился. Откройте журнал в настройках, там написана причина.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_state(p: State<'_, Prism>) -> R<AppState> {
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn set_engine(p: State<'_, Prism>, on: bool) -> R<AppState> {
+    if on {
+        start_engine(&p).await?;
+    } else {
+        p.inner.lock().unwrap().engine.stop();
+        engine::kill_stray();
+    }
+    {
+        let mut i = p.inner.lock().unwrap();
+        i.settings.engine_on = on;
+        p.save(&i);
+    }
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn set_strategy(p: State<'_, Prism>, id: String) -> R<AppState> {
+    let running = {
+        let mut i = p.inner.lock().unwrap();
+        i.settings.strategy = id;
+        p.save(&i);
+        i.engine.alive()
+    };
+    if running {
+        start_engine(&p).await?;
+    }
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn set_games(p: State<'_, Prism>, on: bool) -> R<AppState> {
+    let running = {
+        let mut i = p.inner.lock().unwrap();
+        i.settings.games = on;
+        p.save(&i);
+        i.engine.alive()
+    };
+    if running {
+        start_engine(&p).await?;
+    }
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn set_ai(p: State<'_, Prism>, on: bool) -> R<AppState> {
+    if on {
+        let list = match hosts::download().await {
+            Ok(l) => {
+                let _ = std::fs::write(&p.hosts_cache, &l);
+                l
+            }
+            Err(e) => std::fs::read_to_string(&p.hosts_cache).map_err(|_| e)?,
+        };
+        hosts::enable(&list)?;
+    } else {
+        hosts::disable()?;
+    }
+    {
+        let mut i = p.inner.lock().unwrap();
+        i.settings.ai = on;
+        p.save(&i);
+    }
+    p.log.push(format!("[prism] нейросети: {}", if on { "включено" } else { "выключено" }));
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn set_tg(p: State<'_, Prism>, on: bool) -> R<AppState> {
+    {
+        let mut i = p.inner.lock().unwrap();
+        if on {
+            if i.settings.tg_secret.len() != 32 {
+                i.settings.tg_secret = tgproxy::new_secret();
+            }
+            let (port, secret) = (i.settings.tg_port, i.settings.tg_secret.clone());
+            i.proxy.start(&p.tg_exe, port, &secret, &p.log)?;
+        } else {
+            i.proxy.stop();
+        }
+        i.settings.tg_on = on;
+        p.save(&i);
+    }
+    if on {
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        let mut i = p.inner.lock().unwrap();
+        if !i.proxy.alive() {
+            i.settings.tg_on = false;
+            p.save(&i);
+            return Err("Прокси не запустился. Возможно, порт занят другой программой. Подробности в журнале.".into());
+        }
+    }
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn open_tg_link(p: State<'_, Prism>) -> R<()> {
+    let link = {
+        let i = p.inner.lock().unwrap();
+        tgproxy::link(i.settings.tg_port, &i.settings.tg_secret)
+    };
+    // rundll32 открывает ссылку tg:// в Telegram без участия cmd (символ & не ломается).
+    util::hidden("rundll32").args(["url.dll,FileProtocolHandler", &link]).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn normalize_domain(raw: &str) -> Option<String> {
+    let mut d = raw.trim().to_lowercase();
+    for pre in ["https://", "http://"] {
+        if let Some(rest) = d.strip_prefix(pre) {
+            d = rest.to_string();
+        }
+    }
+    let d = d.split(['/', '?', '#', ':']).next().unwrap_or("").trim_start_matches("www.").to_string();
+    let valid = d.contains('.')
+        && !d.starts_with('.')
+        && !d.ends_with('.')
+        && d.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    valid.then_some(d)
+}
+
+#[tauri::command]
+async fn add_site(p: State<'_, Prism>, domain: String) -> R<AppState> {
+    let d = normalize_domain(&domain).ok_or("Введите адрес сайта, например site.ru")?;
+    let mut sites = read_user_sites(&p.zapret);
+    if sites.contains(&d) {
+        return Err(format!("{d} уже в списке"));
+    }
+    sites.insert(0, d);
+    write_user_sites(&p.zapret, &sites)?;
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn remove_site(p: State<'_, Prism>, domain: String) -> R<AppState> {
+    let sites: Vec<String> = read_user_sites(&p.zapret).into_iter().filter(|s| *s != domain).collect();
+    write_user_sites(&p.zapret, &sites)?;
+    Ok(snapshot(&p))
+}
+
+#[derive(Serialize)]
+struct Status {
+    discord: probe::Check,
+    youtube: probe::Check,
+    telegram: probe::Check,
+    chatgpt: bool,
+}
+
+#[tauri::command]
+async fn check_services(p: State<'_, Prism>) -> R<Status> {
+    let (port, ai) = {
+        let i = p.inner.lock().unwrap();
+        (i.settings.tg_port, i.settings.ai)
+    };
+    let s = probe::services(6).await;
+    let telegram = probe::tcp(port).await;
+    let chatgpt = ai && std::fs::read_to_string(hosts::hosts_path()).map(|t| t.contains("Prism: нейросети")).unwrap_or(false);
+    Ok(Status { discord: s.discord, youtube: s.youtube, telegram, chatgpt })
+}
+
+#[derive(Clone, Serialize)]
+struct Progress {
+    id: String,
+    state: &'static str,
+    ms: u64,
+}
+
+#[tauri::command]
+async fn auto_pick(app: AppHandle, p: State<'_, Prism>) -> R<AppState> {
+    {
+        let mut i = p.inner.lock().unwrap();
+        if i.busy {
+            return Err("Подбор уже идёт".into());
+        }
+        i.busy = true;
+    }
+    let list = engine::list_strategies(&p.zapret);
+    let previous = p.inner.lock().unwrap().settings.strategy.clone();
+    let mut best: Option<(usize, u64, String)> = None;
+    for s in &list {
+        let _ = app.emit("pick-progress", Progress { id: s.id.clone(), state: "wait", ms: 0 });
+        p.inner.lock().unwrap().settings.strategy = s.id.clone();
+        let started = start_engine(&p).await.is_ok();
+        let (score, ms) = if started {
+            let r = probe::services(4).await;
+            let ok = [r.discord.ok, r.youtube.ok].iter().filter(|x| **x).count();
+            let ms = if ok > 0 { (r.discord.ms + r.youtube.ms) / ok as u64 } else { 0 };
+            (ok, ms)
+        } else {
+            (0, 0)
+        };
+        let state = if score == 2 { "ok" } else if score == 1 { "part" } else { "bad" };
+        let _ = app.emit("pick-progress", Progress { id: s.id.clone(), state, ms });
+        p.log.push(format!("[prism] {}: работает {score} из 2, {ms} мс", s.name));
+        let better = match &best {
+            None => score > 0,
+            Some((bs, bms, _)) => score > *bs || (score == *bs && ms < *bms),
+        };
+        if better {
+            best = Some((score, ms, s.id.clone()));
+        }
+    }
+    let chosen = best.map(|b| b.2).unwrap_or(previous);
+    {
+        let mut i = p.inner.lock().unwrap();
+        i.settings.strategy = chosen;
+        i.settings.engine_on = true;
+        i.busy = false;
+        p.save(&i);
+    }
+    let result = start_engine(&p).await;
+    result?;
+    Ok(snapshot(&p))
+}
+
+fn set_autostart_task(on: bool) -> R<()> {
+    if on {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let tr = format!("\"{}\" --autostart", exe.display());
+        let ok = run_quiet("schtasks", &["/Create", "/F", "/TN", TASK_NAME, "/TR", &tr, "/SC", "ONLOGON", "/RL", "HIGHEST"]);
+        if !ok {
+            return Err("Не удалось включить автозапуск".into());
+        }
+    } else {
+        run_quiet("schtasks", &["/Delete", "/F", "/TN", TASK_NAME]);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_autostart(p: State<'_, Prism>, on: bool) -> R<AppState> {
+    set_autostart_task(on)?;
+    {
+        let mut i = p.inner.lock().unwrap();
+        i.settings.autostart = on;
+        p.save(&i);
+    }
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn set_tray(p: State<'_, Prism>, on: bool) -> R<AppState> {
+    {
+        let mut i = p.inner.lock().unwrap();
+        i.settings.tray = on;
+        p.save(&i);
+    }
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn get_log(p: State<'_, Prism>) -> R<String> {
+    Ok(p.log.text())
+}
+
+#[tauri::command]
+async fn close_window(app: AppHandle, p: State<'_, Prism>) -> R<()> {
+    let tray = p.inner.lock().unwrap().settings.tray;
+    if tray {
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.hide();
+        }
+    } else {
+        shutdown(&app);
+        app.exit(0);
+    }
+    Ok(())
+}
+
+fn show_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+fn shutdown(app: &AppHandle) {
+    if let Some(p) = app.try_state::<Prism>() {
+        let mut i = p.inner.lock().unwrap();
+        i.engine.stop();
+        i.proxy.stop();
+    }
+    engine::kill_stray();
+}
+
+fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let log = Log::default();
+    let res = app.path().resource_dir()?.join("resources");
+    let data = app.path().app_local_data_dir()?;
+    std::fs::create_dir_all(&data)?;
+    let zapret = ZapretPaths { root: data.join("zapret") };
+    if let Err(e) = engine::install(&res.join("zapret"), &zapret.root, &log) {
+        log.push(format!("[prism] {e}"));
+    }
+    let settings_file = data.join("settings.json");
+    let mut settings = Settings::load(&settings_file);
+    if settings.tg_secret.len() != 32 {
+        settings.tg_secret = tgproxy::new_secret();
+    }
+    settings.save(&settings_file);
+    let restore = (settings.engine_on, settings.tg_on);
+
+    app.manage(Prism {
+        inner: Mutex::new(Inner { settings, engine: Engine::default(), proxy: Proxy::default(), busy: false }),
+        log,
+        zapret,
+        tg_exe: res.join("tgproxy").join("tg-ws-proxy.exe"),
+        settings_file,
+        hosts_cache: data.join("ai-hosts.txt"),
+    });
+
+    // Трей
+    let show = MenuItem::with_id(app, "show", "Открыть Prism", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    TrayIconBuilder::with_id("main")
+        .icon(app.default_window_icon().cloned().ok_or("no icon")?)
+        .tooltip("Prism")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, e| match e.id.as_ref() {
+            "show" => show_main(app),
+            "quit" => {
+                shutdown(app);
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, e| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+                show_main(tray.app_handle());
+            }
+        })
+        .build(app)?;
+
+    let autostart = std::env::args().any(|a| a == "--autostart");
+    if !autostart {
+        show_main(app.handle());
+    }
+
+    // Вернуть то, что было включено в прошлый раз.
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let p = handle.state::<Prism>();
+        if restore.0 {
+            if let Err(e) = start_engine(&p).await {
+                p.log.push(format!("[prism] {e}"));
+            }
+        }
+        if restore.1 {
+            let mut i = p.inner.lock().unwrap();
+            let (port, secret) = (i.settings.tg_port, i.settings.tg_secret.clone());
+            if let Err(e) = i.proxy.start(&p.tg_exe, port, &secret, &p.log) {
+                p.log.push(format!("[prism] {e}"));
+            }
+        }
+        let _ = handle.emit("state-changed", ());
+    });
+    Ok(())
+}
+
+fn main() {
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .setup(setup)
+        .on_window_event(|w, e| {
+            if let WindowEvent::CloseRequested { api, .. } = e {
+                let tray = w.app_handle().try_state::<Prism>().map(|p| p.inner.lock().unwrap().settings.tray).unwrap_or(false);
+                if tray {
+                    api.prevent_close();
+                    let _ = w.hide();
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_state, set_engine, set_strategy, set_games, set_ai, set_tg, open_tg_link,
+            add_site, remove_site, check_services, auto_pick, set_autostart, set_tray, get_log, close_window
+        ])
+        .build(tauri::generate_context!())
+        .expect("ошибка запуска Prism");
+
+    app.run(|app, e| {
+        if let RunEvent::Exit = e {
+            shutdown(app);
+        }
+    });
+}
