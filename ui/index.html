@@ -4,304 +4,307 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Prism</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="fonts.css">
 <style>
+/* Prism: «оптическая схема». Интернет — луч, Prism — призма, сервисы — лучи спектра. */
 :root{
-  --ink:#fff; --ink2:rgba(255,255,255,.72); --ink3:rgba(255,255,255,.5);
-  --on:#62F0B5; --on-deep:#1FB57E; --warn:#FFC36B; --off:#FF8A8A;
-  --glass:rgba(255,255,255,.10); --glass-hi:rgba(255,255,255,.18);
-  --edge:rgba(255,255,255,.28);
-  --r-win:28px; --r-panel:22px; --r-ctl:14px;
+  --wall:#E3E4DF; --sheet:#F2F2EE; --ink:#1D232B; --ink-2:#5D636C; --line:#C9CBC4; --bad:#BF3A2E;
+  --beam:#FFFFFF; --beam-edge:.22; --knob:#FFFFFF; --grain:.55; --hover:rgba(29,35,43,.07);
+  --yt:#E5484D; --games:#E8831A; --ai:#18A06A; --tg:#1C95DA; --dc:#5865F2;
+  --glass-a:.95; --glass-b:.35;
+  color-scheme:light;
 }
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%}
-body{font-family:"Onest","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;color:var(--ink);
-  background:#120f2e;overflow:hidden;-webkit-font-smoothing:antialiased}
-button,input{font:inherit;color:inherit}
-/* живые «обои» за стеклом */
-.wall{position:fixed;inset:0;overflow:hidden;
-  background:radial-gradient(120% 90% at 10% 10%,#3a2bd1 0%,transparent 55%),
-             radial-gradient(90% 80% at 95% 15%,#0fb3c9 0%,transparent 55%),
-             radial-gradient(90% 90% at 80% 100%,#ff6fb1 0%,transparent 55%),
-             radial-gradient(80% 80% at 0% 100%,#1b2f8f 0%,transparent 60%),#1a1550}
-.blob{position:absolute;border-radius:50%;filter:blur(40px);opacity:.85;animation:drift 26s ease-in-out infinite alternate}
-.b1{width:46vmax;height:46vmax;left:-8vmax;top:30%;background:#7b5cff}
-.b2{width:34vmax;height:34vmax;right:-6vmax;top:-8vmax;background:#22d3c5;animation-duration:31s}
-.b3{width:30vmax;height:30vmax;right:18%;bottom:-12vmax;background:#ff8fb8;animation-duration:22s}
-@keyframes drift{to{transform:translate(6vmax,-4vmax) scale(1.08)}}
-@media (prefers-reduced-motion:reduce){.blob{animation:none}}
+@media (prefers-color-scheme: dark){
+  :root{
+    --wall:#1B1F26; --sheet:#262B34; --ink:#ECEDE8; --ink-2:#A3A9B2; --line:#3B424D; --bad:#FF7466;
+    --beam-edge:0; --knob:#C9CDD3; --grain:0; --hover:rgba(236,237,232,.08);
+    --yt:#FF5D62; --games:#FF9D35; --ai:#2BC58C; --tg:#3AB1F6; --dc:#8188FF;
+    --glass-a:.30; --glass-b:.05;
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font:400 14px/1.5 Geologica,"Segoe UI",sans-serif;color:var(--ink);background:var(--wall);overflow:hidden;user-select:none;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:var(--grain);mix-blend-mode:multiply;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .1 0 0 0 0 .12 0 0 0 0 .14 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 
-/* стекло */
-.glass{position:relative;background:linear-gradient(160deg,rgba(255,255,255,.20),rgba(255,255,255,.06) 40%,rgba(255,255,255,.10));
-  -webkit-backdrop-filter:blur(28px) saturate(170%);backdrop-filter:blur(28px) saturate(170%);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),inset 0 -1px 0 rgba(255,255,255,.12),
-             inset 1px 0 0 rgba(255,255,255,.18),0 18px 50px rgba(10,6,40,.35)}
-.glass::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;
-  background:linear-gradient(135deg,rgba(255,255,255,.75),rgba(255,255,255,.08) 35%,rgba(255,255,255,0) 60%,rgba(255,255,255,.35));
-  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+/* Верхняя полоса: имя, разделы, кнопки окна */
+.top{position:fixed;top:0;left:0;right:0;height:56px;display:flex;align-items:center;padding-left:24px;z-index:5}
+.brand{display:flex;align-items:center;gap:9px;font-size:16px;font-weight:650;letter-spacing:-.01em;margin-right:22px;white-space:nowrap}
+.brand svg{width:26px;height:20px;flex:none}
+.tabs{display:flex;height:100%}
+.nav{position:relative;display:flex;align-items:center;gap:6px;height:100%;padding:0 11px;border:0;background:none;font-size:14px;font-weight:500;color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.nav:hover{color:var(--ink)}
+.nav[aria-current=page]{color:var(--ink)}
+.nav[aria-current=page]::after{content:"";position:absolute;left:11px;right:11px;bottom:11px;height:2px;border-radius:2px;background:var(--ink)}
+.nav:focus-visible{outline-offset:-8px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--c);display:none;box-shadow:0 0 6px var(--c)}
+.dot.on{display:block}
+.grow{flex:1;height:100%}
+.wbtn{align-self:flex-start;width:46px;height:40px;border:0;background:none;display:grid;place-items:center;color:var(--ink-2);cursor:pointer}
+.wbtn svg{width:12px;height:12px}
+.wbtn:hover{background:var(--hover);color:var(--ink)}
+.wbtn.close:hover{background:#C42B1C;color:#fff}
 
-.stage{position:relative;height:100%}
-.win{width:100%;height:100%;border-radius:0;display:grid;grid-template-columns:232px 1fr;overflow:hidden}
-/* боковое меню */
-.side{padding:18px 14px;display:flex;flex-direction:column;gap:4px;background:rgba(255,255,255,.05);border-right:1px solid rgba(255,255,255,.12)}
-.brand{display:flex;align-items:center;gap:10px;padding:6px 10px 18px}
-.logo{width:30px;height:30px;border-radius:9px;background:conic-gradient(from 200deg,#62F0B5,#22d3c5,#7b5cff,#ff8fb8,#62F0B5);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 4px 14px rgba(98,240,181,.35)}
-.brand b{font-size:18px;font-weight:700;letter-spacing:-.01em}
-.nav{display:flex;align-items:center;gap:12px;height:44px;padding:0 12px;border:0;background:none;border-radius:var(--r-ctl);
-  cursor:pointer;color:var(--ink2);font-size:15px;font-weight:500;text-align:left;transition:background .2s,color .2s}
-.nav svg{width:20px;height:20px;flex:none;opacity:.85}
-.nav:hover{background:rgba(255,255,255,.08);color:var(--ink)}
-.nav[aria-current="page"]{color:var(--ink);background:linear-gradient(160deg,rgba(255,255,255,.26),rgba(255,255,255,.10));
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 6px 18px rgba(10,6,40,.18)}
-.nav .dot{margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--on);box-shadow:0 0 10px var(--on);display:none}
-.nav.live .dot{display:block}
-.side .grow{flex:1}
-.ver{font-size:13px;color:var(--ink3);padding:8px 12px}
-:focus-visible{outline:2px solid #fff;outline-offset:2px}
-
-/* контент */
-.main{position:relative;overflow:auto;padding:28px 34px}
-.page{display:none;animation:in .35s ease}
+/* Страницы */
+.page{position:fixed;top:56px;left:0;right:0;bottom:0;overflow:auto;padding:22px 40px 48px;display:none}
 .page.on{display:block}
-#p-home.on{display:flex;flex-direction:column;justify-content:center;min-height:100%}
-@keyframes in{from{opacity:0;transform:translateY(6px)}}
-h1{font-size:28px;font-weight:700;letter-spacing:-.02em}
-.sub{color:var(--ink2);font-size:15px;margin-top:6px;max-width:60ch;line-height:1.5}
-h2{font-size:17px;font-weight:600;margin:28px 0 12px}
+.page > *{max-width:680px}
+h1{font-size:32px;line-height:1.15;font-weight:700;letter-spacing:-.02em;margin:10px 0 8px}
+.sub{font-size:15px;line-height:1.55;color:var(--ink-2);max-width:60ch;margin:0 0 24px}
+h2{font-size:16px;font-weight:600;letter-spacing:-.005em;margin:32px 0 10px}
+.note{font-size:13px;color:var(--ink-2);margin:12px 0 0}
 
-/* главная */
-.hero{display:grid;grid-template-columns:auto 1fr;gap:40px;align-items:center;margin-top:8px}
-.orb{--s:240px;width:var(--s);height:var(--s);border-radius:50%;border:0;cursor:pointer;position:relative;display:grid;place-items:center;
-  background:radial-gradient(circle at 50% 30%,rgba(255,255,255,.35),rgba(255,255,255,.06) 60%),rgba(255,255,255,.06);
-  -webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);
-  box-shadow:inset 0 2px 1px rgba(255,255,255,.7),inset 0 -10px 30px rgba(255,255,255,.08),inset 0 0 0 1px rgba(255,255,255,.3),0 30px 60px rgba(10,6,40,.4);
-  transition:transform .25s cubic-bezier(.3,1.6,.5,1),box-shadow .4s}
-.orb:active{transform:scale(.96)}
-.orb::after{content:"";position:absolute;inset:-14px;border-radius:50%;border:2px solid transparent;transition:.5s}
-.orb .core{width:92px;height:92px;border-radius:50%;display:grid;place-items:center;
-  background:rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.6);transition:.4s}
-.orb svg{width:44px;height:44px;stroke:#fff;stroke-width:2.4;fill:none;stroke-linecap:round}
-.orb.is-on{box-shadow:inset 0 2px 1px rgba(255,255,255,.8),inset 0 0 0 1px rgba(255,255,255,.4),0 0 0 1px rgba(98,240,181,.25),0 0 70px rgba(98,240,181,.45),0 30px 60px rgba(10,6,40,.4)}
-.orb.is-on .core{background:radial-gradient(circle at 50% 35%,#a8ffd9,var(--on) 45%,var(--on-deep));box-shadow:inset 0 2px 2px rgba(255,255,255,.8),0 0 40px rgba(98,240,181,.7)}
-.orb.is-on svg{stroke:#0b3d2a}
-.orb.is-on::after{border-color:rgba(98,240,181,.35);animation:pulse 2.6s ease-out infinite}
-.orb.busy::after{border-color:rgba(255,255,255,.5);border-top-color:transparent;animation:spin 1s linear infinite}
-@keyframes pulse{0%{transform:scale(.96);opacity:1}100%{transform:scale(1.12);opacity:0}}
-@keyframes spin{to{transform:rotate(1turn)}}
-.state{font-size:40px;font-weight:700;letter-spacing:-.03em;line-height:1.05}
-.state-sub{color:var(--ink2);font-size:16px;margin-top:10px;line-height:1.5}
-.checks{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
-.chip{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 14px;border-radius:999px;font-size:14px;font-weight:500;
-  background:rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}
-.chip i{width:8px;height:8px;border-radius:50%;background:var(--ink3)}
-.chip.ok i{background:var(--on);box-shadow:0 0 8px var(--on)}
-.chip.bad i{background:var(--off)}
-.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:34px}
-.tile{border-radius:var(--r-panel);padding:18px;display:flex;flex-direction:column;gap:10px;min-height:132px}
-.tile .top{display:flex;align-items:center;justify-content:space-between}
-.ico{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.5)}
-.ico svg{width:22px;height:22px}
-.tile b{font-size:16px;font-weight:600}
-.tile p{font-size:14px;color:var(--ink2);line-height:1.4}
-/* переключатель */
-.sw{position:relative;width:52px;height:32px;border-radius:999px;border:0;cursor:pointer;flex:none;
-  background:rgba(255,255,255,.18);box-shadow:inset 0 1px 2px rgba(0,0,0,.2),inset 0 0 0 1px rgba(255,255,255,.2);transition:background .3s}
-.sw::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;
-  background:linear-gradient(#fff,#e9e9f5);box-shadow:0 2px 6px rgba(0,0,0,.25),inset 0 1px 0 #fff;transition:transform .3s cubic-bezier(.3,1.5,.5,1)}
-.sw[aria-checked="true"]{background:var(--on-deep);box-shadow:inset 0 0 0 1px rgba(255,255,255,.3),0 0 16px rgba(98,240,181,.45)}
-.sw[aria-checked="true"]::after{transform:translateX(20px)}
+/* Главная: схема */
+#p-home{--k:1}
+#p-home.on{display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;padding:0 40px 28px}
+#p-home > *{max-width:none}
+.update{position:absolute;left:0;top:-14px;display:flex;align-items:center;gap:14px;padding:6px 6px 6px 14px;border-radius:12px;background:var(--sheet);font-size:14px;font-weight:500}
+.update[hidden]{display:none}
+.scene{position:relative;flex:none;width:1000px;height:400px;zoom:var(--k)}
+.state{position:absolute;left:0;bottom:278px;margin:0;font-size:52px;line-height:1;font-weight:300;letter-spacing:-.025em;white-space:nowrap;transition:font-weight .6s cubic-bezier(.3,.7,.3,1)}
+.scene.on .state{font-weight:700}
+.state-sub{position:absolute;left:0;top:158px;width:400px;margin:0;font-size:15px;line-height:1.5;color:var(--ink-2)}
+.acts{position:absolute;left:0;top:230px;display:flex;gap:10px}
+.optics{position:absolute;left:0;top:0;width:1000px;height:400px;overflow:visible;pointer-events:none}
+.prism-btn{position:absolute;left:482px;top:46px;width:156px;height:135px;z-index:2;border:0;padding:0;background:none;cursor:pointer;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.prism-btn:focus-visible{outline:none}
+.lbl{position:absolute;left:786px;right:0;height:40px;display:flex;align-items:center;gap:12px}
+.lbl .t{flex:1;display:flex;flex-direction:column;line-height:1.3;min-width:0}
+.lbl b{font-size:15px;font-weight:600}
+.lbl span{font-size:13px;color:var(--ink-2);white-space:nowrap}
+.lbl.fail span{color:var(--bad)}
 
-/* списки / панели */
-.panel{border-radius:var(--r-panel);padding:6px;background-color:rgba(30,16,90,.18)}
-.row{display:flex;align-items:center;gap:14px;min-height:60px;padding:10px 14px;border-radius:16px}
-.row+.row{border-top:1px solid rgba(255,255,255,.08)}
-.row .t{flex:1}
-.row .t b{display:block;font-size:15px;font-weight:600}
-.row .t span{font-size:13.5px;color:var(--ink2)}
-.row.sel{background:rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.3)}
-.radio{width:22px;height:22px;border-radius:50%;border:2px solid rgba(255,255,255,.5);flex:none;display:grid;place-items:center}
-.row.sel .radio{border-color:var(--on)}
-.row.sel .radio::after{content:"";width:10px;height:10px;border-radius:50%;background:var(--on);box-shadow:0 0 8px var(--on)}
-.badge{font-size:13px;font-weight:600;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.12)}
-.badge.ok{background:rgba(6,60,40,.55);color:#9DFFD6}
-.badge.bad{background:rgba(80,10,20,.45);color:#FFB3B3}
-.badge.wait{color:var(--warn)}
-.btn{height:44px;padding:0 20px;border-radius:var(--r-ctl);border:0;cursor:pointer;font-weight:600;font-size:15px;
-  background:linear-gradient(160deg,rgba(255,255,255,.32),rgba(255,255,255,.12));box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 20px rgba(10,6,40,.2);transition:transform .15s}
-.btn:active{transform:scale(.97)}
-.btn.primary{background:linear-gradient(160deg,#9bffd6,var(--on) 50%,var(--on-deep));color:#06321f;box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 8px 24px rgba(98,240,181,.35)}
-.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
-.field{flex:1;min-width:200px;height:44px;border-radius:var(--r-ctl);border:0;padding:0 16px;font-size:15px;
-  background:rgba(255,255,255,.12);box-shadow:inset 0 1px 2px rgba(0,0,0,.15),inset 0 0 0 1px rgba(255,255,255,.2)}
-.field::placeholder{color:var(--ink3)}
-.x{width:40px;height:40px;display:grid;place-items:center;border-radius:10px;border:0;background:none;cursor:pointer;color:var(--ink2);font-size:20px}
-.x:hover{background:rgba(255,255,255,.1);color:#fff}
-.kv{display:grid;grid-template-columns:auto 1fr auto;gap:0}
-.mono{font-family:Consolas,"Cascadia Mono",monospace;font-size:14px;color:var(--ink)}
-.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.big-toggle{border-radius:var(--r-panel);padding:20px 22px;display:flex;align-items:center;gap:16px;margin-top:22px}
-.big-toggle .t{flex:1}.big-toggle b{font-size:17px}.big-toggle span{display:block;color:var(--ink2);font-size:14px;margin-top:4px}
-.toast{position:fixed;left:50%;bottom:34px;transform:translate(-50%,20px);opacity:0;padding:12px 20px;border-radius:16px;font-size:15px;font-weight:500;transition:.35s;pointer-events:none;z-index:9}
+/* Схема: следы лучей видны всегда, свет зажигается поверх */
+.track{fill:none;stroke:var(--ink-2);stroke-opacity:.5;stroke-width:1.6;stroke-linecap:round;stroke-dasharray:0 7}
+.beam,.beam-glow,.beam-edge{fill:none;stroke-dasharray:1 1;stroke-dashoffset:1;opacity:0;transition:stroke-dashoffset .3s ease-in .3s,opacity .2s .4s}
+.beam{stroke:var(--beam);stroke-width:3.2}
+.beam-edge{stroke:var(--ink);stroke-width:8;filter:url(#soft)}
+.beam-glow{stroke:var(--beam);stroke-width:12;filter:url(#soft)}
+.scene.lit .beam{stroke-dashoffset:0;opacity:1;transition:stroke-dashoffset .4s cubic-bezier(.4,0,.6,1),opacity .05s}
+.scene.lit .beam-edge{stroke-dashoffset:0;opacity:var(--beam-edge);transition:stroke-dashoffset .4s cubic-bezier(.4,0,.6,1),opacity .05s}
+.scene.lit .beam-glow{stroke-dashoffset:0;opacity:.9;transition:stroke-dashoffset .4s cubic-bezier(.4,0,.6,1),opacity .3s .2s}
+.inner{opacity:0;transition:opacity .25s}
+.scene.lit .inner{opacity:1;transition:opacity .3s .35s}
+.prism{fill:var(--sheet);fill-opacity:.55;stroke:var(--ink-2);stroke-opacity:.75;stroke-width:1.4;stroke-linejoin:round;transition:stroke .3s,stroke-opacity .3s}
+.glass{opacity:0;transition:opacity .4s .3s}
+.scene.lit .glass{opacity:1}
+.scene.lit .prism{fill-opacity:0;stroke:var(--ink);stroke-opacity:.8}
+.prism-hl{fill:none;stroke:#fff;stroke-width:1.6;stroke-linecap:round;opacity:0;transition:opacity .4s .3s}
+.scene.lit .prism-hl{opacity:.95}
+.prism-shadow{fill:var(--ink);opacity:.08}
+.prism-btn:hover ~ .optics .prism{stroke:var(--ink);stroke-opacity:1}
+.focus{fill:none;stroke:var(--ink);stroke-width:2;stroke-dasharray:5 5;stroke-linejoin:round;opacity:0}
+.prism-btn:focus-visible ~ .optics .focus{opacity:1}
+.scene.busy .prism{animation:pulse 1s ease-in-out infinite}
+.ray .core{fill:none;stroke:var(--c);stroke-width:2.6;stroke-dasharray:1 1;stroke-dashoffset:1;opacity:0;transition:stroke-dashoffset .25s ease-in,opacity .15s .1s}
+.ray .glow{fill:none;stroke:var(--c);stroke-width:10;filter:url(#soft);opacity:0;transition:opacity .2s}
+.ray .end{fill:var(--wall);stroke:var(--ink-2);stroke-opacity:.6;stroke-width:1.5;transition:fill .2s,stroke .2s}
+.ray.on .core,.ray.wait .core{stroke-dashoffset:0;opacity:1;transition:stroke-dashoffset .55s cubic-bezier(.2,.7,.3,1) var(--d),opacity .05s var(--d)}
+.ray.on .glow{opacity:.32;transition:opacity .5s calc(var(--d) + .3s)}
+.ray.on .end{fill:var(--c);stroke:var(--c);stroke-opacity:1;transition:fill .2s calc(var(--d) + .4s),stroke .2s calc(var(--d) + .4s)}
+.ray.wait .core{animation:pulse 1.1s ease-in-out infinite}
+.ray.fail .core{stroke-dasharray:.42 1;stroke-dashoffset:0;opacity:1}
+.ray.fail .end{stroke:var(--bad);stroke-opacity:1}
+@keyframes pulse{50%{opacity:.35}}
+
+/* Общие элементы */
+.panel{background:var(--sheet);border-radius:14px}
+.row{display:flex;align-items:center;gap:16px;min-height:60px;padding:10px 14px 10px 18px}
+.row + .row{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+.row .t{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.row .t b{font-size:14.5px;font-weight:600}
+.row .t span{font-size:13px;color:var(--ink-2)}
+.big{display:flex;align-items:center;gap:18px;padding:18px 18px 18px 20px;border-radius:16px;background:var(--sheet)}
+.big .t{flex:1;display:flex;flex-direction:column;gap:2px}
+.big .t b{font-size:17px;font-weight:600}
+.big .t span{font-size:13.5px;color:var(--ink-2)}
+.mray{flex:none;position:relative;width:40px;height:2px;margin-right:8px;background:repeating-linear-gradient(90deg,color-mix(in srgb,var(--ink-2) 55%,transparent) 0 2px,transparent 2px 7px);transition:background .3s,box-shadow .3s}
+.mray::after{content:"";position:absolute;right:-9px;top:-4px;width:7px;height:7px;border-radius:50%;box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--ink-2) 65%,transparent);transition:background .3s,box-shadow .3s}
+.mray.on{background:var(--c);box-shadow:0 0 8px var(--c)}
+.mray.on::after{background:var(--c);box-shadow:0 0 8px var(--c)}
+.btn{flex:none;height:40px;padding:0 18px;border:0;border-radius:10px;background:var(--sheet);color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line);white-space:nowrap}
+.btn:hover{box-shadow:inset 0 0 0 1px var(--ink-2)}
+.btn.primary{background:var(--ink);color:var(--sheet);box-shadow:none}
+.btn.primary:hover{background:color-mix(in srgb,var(--ink) 85%,var(--wall))}
+.btn.sm{height:32px;padding:0 14px;font-size:13px;border-radius:8px}
+.btn:disabled{opacity:.55;cursor:default}
+.bar{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+.sw{flex:none;position:relative;width:44px;height:26px;padding:0;border:0;border-radius:13px;background:var(--line);cursor:pointer;transition:background .2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.22);transition:transform .22s cubic-bezier(.3,.7,.3,1),background .2s}
+.sw[aria-checked=true]{background:var(--ink)}
+.sw[aria-checked=true]::after{transform:translateX(18px);background:var(--sheet)}
+.sw:disabled{opacity:.6;cursor:default}
+.radio{flex:none;width:18px;height:18px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--ink-2);transition:box-shadow .2s}
+.row.sel .radio{box-shadow:inset 0 0 0 5.5px var(--ink)}
+.pick{cursor:pointer}
+.pick:hover{background:var(--hover)}
+.pick:first-child{border-radius:14px 14px 0 0}.pick:last-child{border-radius:0 0 14px 14px}
+.res{font-size:13px;color:var(--ink-2);white-space:nowrap}
+.res.ok{color:var(--ink);font-weight:600}
+.res.bad{color:var(--bad)}
+.res.wait{animation:pulse 1.1s ease-in-out infinite}
+.field{flex:1;min-width:220px;height:40px;padding:0 14px;border:0;border-radius:10px;background:var(--sheet);box-shadow:inset 0 0 0 1px var(--line);font:inherit;font-size:14px;color:var(--ink);user-select:text}
+.field::placeholder{color:var(--ink-2)}
+.field:focus{outline:none;box-shadow:inset 0 0 0 2px var(--ink)}
+.x{flex:none;width:34px;height:34px;display:grid;place-items:center;border:0;border-radius:9px;background:none;color:var(--ink-2);font-size:20px;line-height:1;cursor:pointer}
+.x:hover{background:var(--hover);color:var(--ink)}
+.code{font:13px/1.4 "Cascadia Mono",Consolas,monospace;color:var(--ink);user-select:text;word-break:break-all}
+.log{max-height:230px;overflow:auto;padding:14px 18px;font:12px/1.55 "Cascadia Mono",Consolas,monospace;color:var(--ink-2);white-space:pre-wrap;user-select:text}
+.toast{position:fixed;left:50%;bottom:22px;z-index:20;max-width:80%;padding:10px 16px;border-radius:12px;background:var(--ink);color:var(--sheet);font-size:14px;font-weight:500;opacity:0;transform:translate(-50%,14px);transition:opacity .2s,transform .25s;pointer-events:none}
 .toast.show{opacity:1;transform:translate(-50%,0)}
-
-@media (max-width:820px){
-  .stage{padding:0}.win{height:100%;border-radius:0;grid-template-columns:1fr;grid-template-rows:auto 1fr}
-  .side{flex-direction:row;overflow-x:auto;padding:10px;border-right:0;border-bottom:1px solid rgba(255,255,255,.12)}
-  .brand,.side .grow,.ver{display:none}.nav{flex:none}
-  .hero{grid-template-columns:1fr;justify-items:center;text-align:center}.checks{justify-content:center}
-  .orb{--s:190px}.tiles,.split{grid-template-columns:1fr}.main{padding:22px 18px}
-}
-
-.win.glass::before{display:none}
-.titlebar{position:absolute;top:0;left:0;right:0;height:40px;display:flex;justify-content:flex-end;z-index:5}
-.titlebar .drag{flex:1}
-.wbtn{width:46px;height:40px;border:0;background:none;color:var(--ink2);cursor:pointer;display:grid;place-items:center}
-.wbtn:hover{background:rgba(255,255,255,.12);color:#fff}
-.wbtn.close:hover{background:#e5484d;color:#fff}
-.wbtn svg{width:14px;height:14px}
-.main{padding-top:44px}
-.side{padding-top:22px}
-.sw:disabled,.btn:disabled{opacity:.55;cursor:progress}
-.badge.part{background:rgba(90,60,0,.45);color:#FFD89A}
-.note{font-size:14px;color:var(--ink2);margin-top:10px}
-.log{white-space:pre-wrap;word-break:break-all;font-family:Consolas,"Cascadia Mono",monospace;font-size:12.5px;line-height:1.5;color:var(--ink2);max-height:260px;overflow:auto;padding:14px}
-#strats{max-height:none}
-.err{color:#FFB3B3}
-.update-bar{display:flex;align-items:center;gap:16px;justify-content:space-between;border-radius:18px;padding:10px 10px 10px 20px;margin-bottom:22px;font-size:15px;font-weight:500}
-.update-bar[hidden]{display:none}
+::-webkit-scrollbar{width:12px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:12px;border:4px solid var(--wall)}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 </style>
 </head>
 <body>
-<div class="wall" aria-hidden="true"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>
-<div class="stage">
-<div class="win glass">
-  <div class="titlebar">
-    <div class="drag" data-tauri-drag-region></div>
-    <button class="wbtn" id="wMin" aria-label="Свернуть"><svg viewBox="0 0 14 14"><path d="M2 7h10" stroke="currentColor" stroke-width="1.4"/></svg></button>
-    <button class="wbtn close" id="wClose" aria-label="Закрыть"><svg viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.4"/></svg></button>
+<header class="top" data-tauri-drag-region>
+  <div class="brand" data-tauri-drag-region>
+    <svg viewBox="0 0 26 20" aria-hidden="true"><path d="M1 11.5h6.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 3l6 12H6z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M16.6 12.2 25 11" stroke="#E5484D" stroke-width="1.7" stroke-linecap="round"/><path d="M17 13 25 14.6" stroke="#18A06A" stroke-width="1.7" stroke-linecap="round"/><path d="M17.4 13.8 25 18.2" stroke="#5865F2" stroke-width="1.7" stroke-linecap="round"/></svg>
+    Prism
   </div>
-  <nav class="side" aria-label="Разделы">
-    <div class="brand" data-tauri-drag-region><div class="logo"></div><b>Prism</b></div>
-    <button class="nav" data-go="home" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>Главная<span class="dot" id="d-home"></span></button>
-    <button class="nav" data-go="tg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 4 3 11l6 2 2 6 3-4 5 4z"/><path d="m9 13 8-6"/></svg>Telegram<span class="dot" id="d-tg"></span></button>
-    <button class="nav" data-go="games"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 11v3M5.5 12.5h3M15 12h.01M18 13h.01"/></svg>Игры<span class="dot" id="d-games"></span></button>
-    <button class="nav" data-go="ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg>Нейросети<span class="dot" id="d-ai"></span></button>
-    <button class="nav" data-go="strat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M4 12h16M4 18h7"/><circle cx="17" cy="6" r="2"/><circle cx="14" cy="18" r="2"/></svg>Стратегии</button>
-    <button class="nav" data-go="sites"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>Сайты</button>
-    <div class="grow"></div>
-    <button class="nav" data-go="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Настройки</button>
-    
+  <nav class="tabs" aria-label="Разделы">
+    <button class="nav" data-go="home" aria-current="page">Главная</button>
+    <button class="nav" data-go="tg">Telegram<i class="dot" id="d-tg" style="--c:var(--tg)"></i></button>
+    <button class="nav" data-go="games">Игры<i class="dot" id="d-games" style="--c:var(--games)"></i></button>
+    <button class="nav" data-go="ai">Нейросети<i class="dot" id="d-ai" style="--c:var(--ai)"></i></button>
+    <button class="nav" data-go="strat">Стратегии</button>
+    <button class="nav" data-go="sites">Сайты</button>
+    <button class="nav" data-go="set">Настройки</button>
   </nav>
-  <main class="main">
-    <section class="page on" id="p-home">
-      <div class="update-bar glass" id="updBar" hidden><span id="updText">Вышла новая версия Prism</span><button class="btn primary" id="updBarBtn">Обновить</button></div>
-      <div class="hero">
-        <button class="orb" id="orb" aria-pressed="false" aria-label="Включить обход"><span class="core"><svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></span></button>
-        <div>
-          <div class="state" id="state">Обход выключен</div>
-          <div class="state-sub" id="stateSub">Нажмите на кнопку, чтобы открыть Discord и YouTube.</div>
-          <div class="checks" id="checks">
-            <span class="chip" data-s="discord"><i></i>Discord</span>
-            <span class="chip" data-s="youtube"><i></i>YouTube</span>
-            <span class="chip" data-s="telegram"><i></i>Telegram</span>
-            <span class="chip" data-s="chatgpt"><i></i>ChatGPT</span>
-          </div>
-        </div>
-      </div>
-      <div class="tiles">
-        <div class="tile glass">
-          <div class="top"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"><path d="M21 4 3 11l6 2 2 6 3-4 5 4z"/></svg></div><button class="sw" role="switch" aria-checked="false" data-mod="tg" aria-label="Прокси для Telegram"></button></div>
-          <b>Telegram</b><p>Свой прокси на компьютере. Работает отдельно от обхода.</p>
-        </div>
-        <div class="tile glass">
-          <div class="top"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 11v3M5.5 12.5h3"/></svg></div><button class="sw" role="switch" aria-checked="false" data-mod="games" aria-label="Режим для игр"></button></div>
-          <b>Режим для игр</b><p>Обход для игровых серверов и голосовых чатов.</p>
-        </div>
-        <div class="tile glass">
-          <div class="top"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg></div><button class="sw" role="switch" aria-checked="false" data-mod="ai" aria-label="Доступ к нейросетям"></button></div>
-          <b>Нейросети</b><p>ChatGPT, Gemini, Claude и другие без VPN.</p>
-        </div>
-      </div>
-    </section>
+  <div class="grow" data-tauri-drag-region></div>
+  <button class="wbtn" id="wMin" aria-label="Свернуть"><svg viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1.2"/></svg></button>
+  <button class="wbtn close" id="wClose" aria-label="Закрыть"><svg viewBox="0 0 12 12"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" stroke-width="1.2"/></svg></button>
+</header>
 
-    <section class="page" id="p-tg">
-      <h1>Telegram</h1>
-      <p class="sub">Прокси запускается на вашем компьютере и пускает Telegram Desktop в обход блокировки. Сообщения остаются зашифрованными.</p>
-      <div class="big-toggle glass"><div class="t"><b>Прокси для Telegram</b><span id="tgState">Выключен</span></div><button class="sw" role="switch" aria-checked="false" data-mod="tg" aria-label="Прокси для Telegram"></button></div>
-      <h2>Данные для подключения</h2>
-      <div class="panel glass">
-        <div class="row"><div class="t"><span>Адрес</span><b class="mono" id="tgHost">127.0.0.1</b></div><button class="x" data-copy="tgHost" aria-label="Копировать адрес"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="3"/><path d="M5 15V6a3 3 0 0 1 3-3h7"/></svg></button></div>
-        <div class="row"><div class="t"><span>Порт</span><b class="mono" id="tgPort">1443</b></div><button class="x" data-copy="tgPort" aria-label="Копировать порт"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="3"/><path d="M5 15V6a3 3 0 0 1 3-3h7"/></svg></button></div>
-        <div class="row"><div class="t"><span>Секрет</span><b class="mono" id="tgSecret">dd…</b></div><button class="x" data-copy="tgSecret" aria-label="Копировать секрет"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="3"/><path d="M5 15V6a3 3 0 0 1 3-3h7"/></svg></button></div>
-      </div>
-      <div class="bar"><button class="btn primary" id="tgOpen">Добавить в Telegram</button><button class="btn" id="tgCopyLink">Копировать ссылку</button></div>
-    </section>
+<main>
+  <section class="page on" id="p-home">
+    <div class="scene" id="scene">
+      <div class="update" id="updBar" hidden><span id="updText">Вышла новая версия Prism</span><button class="btn primary sm" id="updBarBtn">Обновить</button></div>
+      <h1 class="state" id="state" aria-live="polite">Обход выключен</h1>
+      <p class="state-sub" id="stateSub">Включите обход, чтобы открылись Discord и YouTube.</p>
+      <div class="acts"><button class="btn primary" id="power">Включить обход</button><button class="btn" id="pickHome">Подобрать стратегию</button></div>
+      <button class="prism-btn" id="orb" aria-pressed="false" aria-label="Включить обход" title="Включить или выключить обход"></button>
+      <svg class="optics" viewBox="0 100 1000 400" aria-hidden="true">
+        <defs>
+          <filter id="soft" x="-20%" y="-200%" width="140%" height="500%"><feGaussianBlur stdDeviation="3.5"/></filter>
+          <filter id="soft6" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="7"/></filter>
+          <linearGradient id="glassG" x1="0" y1="0" x2=".6" y2="1">
+            <stop offset="0" style="stop-color:#fff;stop-opacity:var(--glass-a)"/>
+            <stop offset="1" style="stop-color:#fff;stop-opacity:var(--glass-b)"/>
+          </linearGradient>
+          <linearGradient id="specG" gradientUnits="userSpaceOnUse" x1="0" y1="244" x2="0" y2="264">
+            <stop offset="0" style="stop-color:var(--yt)"/><stop offset=".25" style="stop-color:var(--games)"/><stop offset=".5" style="stop-color:var(--ai)"/><stop offset=".75" style="stop-color:var(--tg)"/><stop offset="1" style="stop-color:var(--dc)"/>
+          </linearGradient>
+          <linearGradient id="whiteG" gradientUnits="userSpaceOnUse" x1="508" y1="0" x2="627" y2="0">
+            <stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset=".85" stop-color="#fff" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <polygon class="prism-shadow" points="572,162 650,297 494,297" filter="url(#soft6)"/>
+        <g class="tracks">
+          <path class="track" d="M-700 236H508"/>
+          <path class="track" d="M617.8 246L770 236"/><path class="track" d="M620.1 250L770 290"/><path class="track" d="M622.4 254L770 344"/><path class="track" d="M624.7 258L770 398"/><path class="track" d="M627 262L770 452"/>
+        </g>
+        <path class="beam-glow" d="M-700 236H508" pathLength="1"/>
+        <path class="beam-edge" d="M-700 236H508" pathLength="1"/>
+        <path class="beam" d="M-700 236H508" pathLength="1"/>
+        <g class="ray" data-r="yt" style="--c:var(--yt);--d:.32s"><path class="glow" d="M617.8 246L770 236"/><path class="core" d="M617.8 246L770 236" pathLength="1"/><circle class="end" cx="770" cy="236" r="4.5"/></g>
+        <g class="ray" data-r="games" style="--c:var(--games);--d:.39s"><path class="glow" d="M620.1 250L770 290"/><path class="core" d="M620.1 250L770 290" pathLength="1"/><circle class="end" cx="770" cy="290" r="4.5"/></g>
+        <g class="ray" data-r="ai" style="--c:var(--ai);--d:.46s"><path class="glow" d="M622.4 254L770 344"/><path class="core" d="M622.4 254L770 344" pathLength="1"/><circle class="end" cx="770" cy="344" r="4.5"/></g>
+        <g class="ray" data-r="tg" style="--c:var(--tg);--d:.53s"><path class="glow" d="M624.7 258L770 398"/><path class="core" d="M624.7 258L770 398" pathLength="1"/><circle class="end" cx="770" cy="398" r="4.5"/></g>
+        <g class="ray" data-r="dc" style="--c:var(--dc);--d:.60s"><path class="glow" d="M627 262L770 452"/><path class="core" d="M627 262L770 452" pathLength="1"/><circle class="end" cx="770" cy="452" r="4.5"/></g>
+        <polygon class="glass" points="560,146 638,281 482,281" fill="url(#glassG)"/>
+        <g class="inner"><polygon points="508,236 617.8,246 627,262" fill="url(#specG)" opacity=".85"/><polygon points="508,236 617.8,246 627,262" fill="url(#whiteG)"/></g>
+        <polygon class="prism" points="560,146 638,281 482,281"/>
+        <path class="prism-hl" d="M556 155L490 270"/>
+        <polygon class="focus" points="560,128 653,290 467,290"/>
+      </svg>
+      <div class="lbl" data-r="yt" style="top:116px"><div class="t"><b>YouTube</b><span id="st-yt">Выключено</span></div></div>
+      <div class="lbl" data-r="games" style="top:170px"><div class="t"><b>Игры</b><span id="st-games">Выключено</span></div><button class="sw" role="switch" aria-checked="false" data-mod="games" aria-label="Режим для игр"></button></div>
+      <div class="lbl" data-r="ai" style="top:224px"><div class="t"><b>Нейросети</b><span id="st-ai">Выключено</span></div><button class="sw" role="switch" aria-checked="false" data-mod="ai" aria-label="Доступ к нейросетям"></button></div>
+      <div class="lbl" data-r="tg" style="top:278px"><div class="t"><b>Telegram</b><span id="st-tg">Выключено</span></div><button class="sw" role="switch" aria-checked="false" data-mod="tg" aria-label="Прокси для Telegram"></button></div>
+      <div class="lbl" data-r="dc" style="top:332px"><div class="t"><b>Discord</b><span id="st-dc">Выключено</span></div></div>
+    </div>
+  </section>
 
-    <section class="page" id="p-games">
-      <h1>Режим для игр</h1>
-      <p class="sub">Включает обход для игровых серверов, голосовых чатов Discord и лаунчеров. Если в обычных сайтах начнутся проблемы, выключите этот режим.</p>
-      <div class="big-toggle glass"><div class="t"><b>Режим для игр</b><span>Применяется к работающему обходу сразу</span></div><button class="sw" role="switch" aria-checked="false" data-mod="games" aria-label="Режим для игр"></button></div>
-      <h2>Что работает в этом режиме</h2>
-      <div class="panel glass">
-        <div class="row"><div class="t"><b>Голосовые каналы Discord</b><span>Нет звука или «Подключение к RTC»</span></div></div>
-        <div class="row"><div class="t"><b>Онлайн-игры</b><span>Вход в аккаунт и поиск матча, если их блокируют</span></div></div>
-        <div class="row"><div class="t"><b>Лаунчеры</b><span>Загрузка обновлений и магазин</span></div></div>
-      </div>
-    </section>
+  <section class="page" id="p-tg">
+    <h1>Telegram</h1>
+    <p class="sub">Prism запускает прокси на вашем компьютере, и Telegram Desktop работает без блокировок. Сообщения остаются зашифрованными.</p>
+    <div class="big"><i class="mray" id="r-tg" style="--c:var(--tg)"></i><div class="t"><b>Прокси для Telegram</b><span id="tgState">Выключен</span></div><button class="sw" role="switch" aria-checked="false" data-mod="tg" aria-label="Прокси для Telegram"></button></div>
+    <div class="bar"><button class="btn primary" id="tgOpen">Добавить в Telegram</button><button class="btn" id="tgCopyLink">Копировать ссылку</button></div>
+    <h2>Данные для ручной настройки</h2>
+    <div class="panel">
+      <div class="row"><div class="t"><span>Адрес</span><b class="code" id="tgHost">127.0.0.1</b></div><button class="x" data-copy="tgHost" aria-label="Копировать адрес"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg></button></div>
+      <div class="row"><div class="t"><span>Порт</span><b class="code" id="tgPort">1443</b></div><button class="x" data-copy="tgPort" aria-label="Копировать порт"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg></button></div>
+      <div class="row"><div class="t"><span>Секрет</span><b class="code" id="tgSecret">dd…</b></div><button class="x" data-copy="tgSecret" aria-label="Копировать секрет"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg></button></div>
+    </div>
+  </section>
 
-    <section class="page" id="p-ai">
-      <h1>Нейросети</h1>
-      <p class="sub">Эти сервисы закрыли доступ из России сами. Prism направляет их адреса через сервера проекта dns.malw.link, и сайты открываются без VPN. Работает, даже когда Prism закрыт.</p>
-      <div class="big-toggle glass"><div class="t"><b>Доступ к нейросетям</b><span id="aiState">Выключен</span></div><button class="sw" role="switch" aria-checked="false" data-mod="ai" aria-label="Доступ к нейросетям"></button></div>
-      <h2>Сервисы</h2>
-      <div class="panel glass" id="aiList">
-        <div class="row"><div class="t"><b>ChatGPT и Sora</b><span>chatgpt.com, openai.com</span></div><span class="badge">Выключено</span></div>
-        <div class="row"><div class="t"><b>Gemini</b><span>gemini.google.com</span></div><span class="badge">Выключено</span></div>
-        <div class="row"><div class="t"><b>Claude</b><span>claude.ai</span></div><span class="badge">Выключено</span></div>
-        <div class="row"><div class="t"><b>Copilot и Grok</b><span>copilot.microsoft.com, grok.com</span></div><span class="badge">Выключено</span></div>
-      </div>
-    </section>
+  <section class="page" id="p-games">
+    <h1>Режим для игр</h1>
+    <p class="sub">Обход начинает работать и для игровых серверов, голосовых чатов Discord и лаунчеров. Если обычные сайты станут открываться хуже, выключите режим.</p>
+    <div class="big"><i class="mray" id="r-games" style="--c:var(--games)"></i><div class="t"><b>Режим для игр</b><span id="gmState">Выключен</span></div><button class="sw" role="switch" aria-checked="false" data-mod="games" aria-label="Режим для игр"></button></div>
+    <h2>Что начнёт работать</h2>
+    <div class="panel">
+      <div class="row"><div class="t"><b>Голосовые каналы Discord</b><span>Если нет звука или висит «Подключение к RTC»</span></div></div>
+      <div class="row"><div class="t"><b>Онлайн-игры</b><span>Вход в аккаунт и поиск матча</span></div></div>
+      <div class="row"><div class="t"><b>Лаунчеры</b><span>Загрузка обновлений и магазин</span></div></div>
+    </div>
+  </section>
 
-    <section class="page" id="p-strat">
-      <h1>Стратегии</h1>
-      <p class="sub">Провайдеры блокируют по-разному. Prism по очереди проверит каждую стратегию и включит самую быструю. Это займёт пару минут.</p>
-      <div class="bar"><button class="btn primary" id="auto">Подобрать автоматически</button></div>
-      <h2>Все стратегии</h2>
-      <div class="panel glass" id="strats"></div>
-    </section>
+  <section class="page" id="p-ai">
+    <h1>Нейросети</h1>
+    <p class="sub">Эти сервисы сами закрыли доступ из России. Prism направляет их адреса через серверы проекта dns.malw.link, и сайты открываются без VPN. Работает, даже когда Prism закрыт.</p>
+    <div class="big"><i class="mray" id="r-ai" style="--c:var(--ai)"></i><div class="t"><b>Доступ к нейросетям</b><span id="aiState">Выключен</span></div><button class="sw" role="switch" aria-checked="false" data-mod="ai" aria-label="Доступ к нейросетям"></button></div>
+    <h2>Сервисы</h2>
+    <div class="panel" id="aiList">
+      <div class="row"><div class="t"><b>ChatGPT и Sora</b><span>chatgpt.com, openai.com</span></div><span class="res">Выключено</span></div>
+      <div class="row"><div class="t"><b>Gemini</b><span>gemini.google.com</span></div><span class="res">Выключено</span></div>
+      <div class="row"><div class="t"><b>Claude</b><span>claude.ai</span></div><span class="res">Выключено</span></div>
+      <div class="row"><div class="t"><b>Copilot и Grok</b><span>copilot.microsoft.com, grok.com</span></div><span class="res">Выключено</span></div>
+    </div>
+  </section>
 
-    <section class="page" id="p-sites">
-      <h1>Сайты</h1>
-      <p class="sub">Обход применяется только к сайтам из списков. Остальной интернет работает как обычно.</p>
-      <form class="bar" id="addForm"><input class="field" id="addInput" placeholder="Например, rutracker.org" aria-label="Адрес сайта" autocomplete="off"><button class="btn primary">Добавить сайт</button></form>
-      <p class="note" id="builtin"></p>
-      <h2 id="sitesCount">Ваши сайты</h2>
-      <div class="panel glass" id="sites"></div>
-    </section>
+  <section class="page" id="p-strat">
+    <h1>Стратегии</h1>
+    <p class="sub">Провайдеры блокируют по-разному. Prism по очереди проверит каждую стратегию и включит самую быструю. Это займёт пару минут.</p>
+    <div class="bar"><button class="btn primary" id="auto">Подобрать автоматически</button></div>
+    <h2>Все стратегии</h2>
+    <div class="panel" id="strats" role="radiogroup" aria-label="Стратегии"></div>
+  </section>
 
-    <section class="page" id="p-set">
-      <h1>Настройки</h1>
-      <h2>Запуск</h2>
-      <div class="panel glass">
-        <div class="row"><div class="t"><b>Запускать вместе с Windows</b><span>Prism откроется в трее и включит то, что было включено</span></div><button class="sw" role="switch" aria-checked="false" data-mod="autostart" aria-label="Автозапуск"></button></div>
-        <div class="row"><div class="t"><b>Сворачивать в трей</b><span>Крестик прячет окно, а обход продолжает работать</span></div><button class="sw" role="switch" aria-checked="true" data-mod="tray" aria-label="Сворачивать в трей"></button></div>
-      </div>
-      <h2>Обновления</h2>
-      <div class="panel glass">
-        <div class="row"><div class="t"><b>Prism</b><span id="appVer">Версия …</span></div><button class="btn" id="appUpd">Проверить</button></div>
-        <div class="row"><div class="t"><b>Обходы от Flowseal</b><span id="zapVer">Версия …</span></div><button class="btn" id="zapUpd">Проверить</button></div>
-        <div class="row"><div class="t"><b>Обновлять автоматически</b><span>Обходы и адреса нейросетей обновляются сами при запуске. О новой версии Prism придёт уведомление</span></div><button class="sw" role="switch" aria-checked="true" data-mod="auto_update" aria-label="Обновлять автоматически"></button></div>
-      </div>
-      <h2>Журнал</h2>
-      <div class="panel glass"><div class="log" id="log">Пока пусто</div></div>
-      <div class="bar"><button class="btn" id="logRefresh">Обновить журнал</button></div>
-    </section>
-  </main>
-</div>
-</div>
-<div class="toast glass" id="toast" role="status"></div>
+  <section class="page" id="p-sites">
+    <h1>Сайты</h1>
+    <p class="sub">Обход работает только для сайтов из списков. Остальной интернет идёт как обычно.</p>
+    <form class="bar" id="addForm"><input class="field" id="addInput" placeholder="Например, rutracker.org" aria-label="Адрес сайта" autocomplete="off"><button class="btn primary">Добавить сайт</button></form>
+    <p class="note" id="builtin"></p>
+    <h2 id="sitesCount">Ваши сайты</h2>
+    <div class="panel" id="sites"></div>
+  </section>
+
+  <section class="page" id="p-set">
+    <h1>Настройки</h1>
+    <h2>Запуск</h2>
+    <div class="panel">
+      <div class="row"><div class="t"><b>Запускать вместе с Windows</b><span>Prism откроется в трее и включит то, что было включено</span></div><button class="sw" role="switch" aria-checked="false" data-mod="autostart" aria-label="Запускать вместе с Windows"></button></div>
+      <div class="row"><div class="t"><b>Сворачивать в трей</b><span>Крестик прячет окно, а обход продолжает работать</span></div><button class="sw" role="switch" aria-checked="true" data-mod="tray" aria-label="Сворачивать в трей"></button></div>
+    </div>
+    <h2>Обновления</h2>
+    <div class="panel">
+      <div class="row"><div class="t"><b>Prism</b><span id="appVer">Версия …</span></div><button class="btn sm" id="appUpd">Проверить</button></div>
+      <div class="row"><div class="t"><b>Обходы от Flowseal</b><span id="zapVer">Версия …</span></div><button class="btn sm" id="zapUpd">Проверить</button></div>
+      <div class="row"><div class="t"><b>Обновлять автоматически</b><span>Обходы и адреса нейросетей обновляются при запуске. О новой версии Prism появится сообщение на главной</span></div><button class="sw" role="switch" aria-checked="true" data-mod="auto_update" aria-label="Обновлять автоматически"></button></div>
+    </div>
+    <h2>Журнал</h2>
+    <div class="panel"><div class="log" id="log">Пока пусто</div></div>
+    <div class="bar"><button class="btn" id="logRefresh">Обновить журнал</button></div>
+  </section>
+</main>
+<div class="toast" id="toast" role="status"></div>
 <script src="app.js"></script>
 </body>
 </html>
