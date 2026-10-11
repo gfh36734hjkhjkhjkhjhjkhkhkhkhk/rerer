@@ -7,7 +7,7 @@ const mock = (() => {
   const st = { engine_on:false, strategy:'general.bat', games:false, ai:false, tg_on:false, autostart:false, tray:true,
     tg:{host:'127.0.0.1',port:1443,secret:'7f3a9c41e0b25d88f6c1a04e93b7d2aa',link:'tg://proxy?server=127.0.0.1&port=1443&secret=dd7f3a9c41e0b25d88f6c1a04e93b7d2aa'},
     strategies:[['general.bat','Основная','Рекомендуемая, начните с неё'],['general (ALT).bat','ALT','Альтернативная разрезка пакетов'],['general (ALT2).bat','ALT2','Альтернативная разрезка пакетов'],['general (FAKE TLS AUTO).bat','FAKE TLS AUTO','Поддельное TLS-приветствие, часто помогает на мобильном интернете'],['general (SIMPLE FAKE).bat','SIMPLE FAKE','Простые фейковые пакеты']].map(([id,name,desc])=>({id,name,desc})),
-    since:0, user_sites:['rutracker.org','nnmclub.to'], builtin_sites:142, auto_update:true, app_version:'0.4.0', zapret_version:'1.10.3', portable:false, versions:['zapret-discord-youtube 1.10.3 (winws из zapret v72.9)','tg-ws-proxy 1.11.1'] };
+    since:0, user_sites:['rutracker.org','nnmclub.to'], builtin_sites:142, auto_update:true, app_version:'0.5.0', zapret_version:'1.10.3', portable:false, versions:['zapret-discord-youtube 1.10.3 (winws из zapret v72.9)','tg-ws-proxy 1.11.1'] };
   const wait = ms => new Promise(r => setTimeout(r, ms));
   return async (cmd, a = {}) => {
     await wait(300);
@@ -27,7 +27,7 @@ const mock = (() => {
         st.strategy = 'general.bat'; st.engine_on = true; st.since = Date.now(); break;
       case 'get_log': return '[prism] предпросмотр в браузере';
       case 'set_auto_update': st.auto_update = a.on; break;
-      case 'check_updates': return { app:{current:'0.4.0',latest:'0.4.1',available:true}, zapret:{current:'1.10.3',latest:'1.10.3',available:false} };
+      case 'check_updates': return { app:{current:'0.5.0',latest:'0.5.1',available:true}, zapret:{current:'1.10.3',latest:'1.10.3',available:false} };
       case 'update_zapret': throw 'У вас уже последняя версия обходов';
       case 'update_app': return null;
       case 'open_tg_link': case 'close_window': return null;
@@ -40,18 +40,6 @@ function emit(ev, payload) { (handlers[ev] || []).forEach(f => f({ payload })); 
 const invoke = T ? T.core.invoke : mock;
 const listen = T ? T.event.listen : async (ev, f) => { (handlers[ev] ||= []).push(f); };
 
-// Безель: 60 рисок вокруг ручки, каждая пятая длиннее. При включении загораются спектром по кругу.
-(function drawTicks() {
-  const n = 60, c = 106;
-  let h = '';
-  for (let i = 0; i < n; i++) {
-    const a = i / n * Math.PI * 2, mj = i % 5 === 0;
-    const r1 = mj ? 87 : 92, r2 = 99, x = Math.sin(a), y = -Math.cos(a);
-    const f = v => v.toFixed(2);
-    h += `<line class="tick${mj ? ' mj' : ''}" style="--i:${i};--c:hsl(${Math.round(i / n * 360)} 74% 71%)" x1="${f(c + x * r1)}" y1="${f(c + y * r1)}" x2="${f(c + x * r2)}" y2="${f(c + y * r2)}"/>`;
-  }
-  $('#ticks').innerHTML = h;
-})();
 
 let S = null;          // последнее состояние из программы
 let svc = null;        // результаты последней проверки Discord и YouTube
@@ -177,7 +165,7 @@ $('#pickBtn').onclick = async () => {
 // Сайты
 function drawSites() {
   const list = S.user_sites;
-  $('#sites').innerHTML = list.map(s => `<div class="row"><span class="av" aria-hidden="true">${esc(s[0] || '')}</span><div class="t"><b>${esc(s)}</b></div><button class="x" data-del="${esc(s)}" aria-label="Убрать ${esc(s)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('')
+  $('#sites').innerHTML = list.map(s => `<div class="row"><div class="t"><b>${esc(s)}</b></div><button class="x" data-del="${esc(s)}" aria-label="Убрать ${esc(s)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('')
     || '<div class="empty">Здесь пока пусто. Добавьте сайт, который не открывается.</div>';
   $('#builtin').textContent = `Ещё ${S.builtin_sites} сайтов уже есть во встроенном списке: Discord, YouTube и другие.`;
   $$('[data-del]').forEach(b => b.onclick = () => call('remove_site', { domain: b.dataset.del }, `${b.dataset.del} убран из списка`).catch(() => {}));
@@ -262,7 +250,6 @@ function render() {
   for (const [id, x] of [['dc', dc], ['yt', yt]]) {
     const row = $(`#svc-${id}`);
     row.className = 'row svc ' + x[0];
-    row.querySelector('.bars').className = 'bars' + (x[2] ? ' q' + x[2] : '');
     $(`#st-${id}`).textContent = x[1];
   }
   $('#recheck').hidden = !on || busyText || picking;
@@ -272,8 +259,7 @@ function render() {
   const cur = S.strategies.find(x => pick[x.id] && pick[x.id].state === 'wait');
   $('#stratName').textContent = !total ? 'Не найдены. Переустановите Prism'
     : picking ? (cur ? `Проверяю «${cur.name}»` : 'Готовлю проверку') : (strat ? strat.name : S.strategy);
-  const lit = picking ? Math.round(done / Math.max(total, 1) * 60) : 0;
-  $$('.tick').forEach((t, i) => t.classList.toggle('lit', i < lit));
+  $('#arc').style.strokeDasharray = picking ? `${Math.max(2, Math.round(done / Math.max(total, 1) * 100))} 100` : '';
   const pb = $('#pickBtn');
   pb.textContent = picking ? 'Подбираю…' : 'Подобрать';
   pb.className = 'btn' + (failed.length && !picking ? ' primary' : '');
@@ -289,13 +275,13 @@ function render() {
   $('#tgMore').hidden = !S.tg_on || tgBad;
   if (!S.tg_on) $('#tgKv').hidden = true;
   $('#tgHost').textContent = S.tg.host; $('#tgPort').textContent = S.tg.port; $('#tgSecret').textContent = 'dd' + S.tg.secret;
-  $('#gmSub').textContent = !S.games ? 'Голосовые чаты, онлайн-игры и лаунчеры'
-    : on ? 'Работает для игр и голосовых чатов' : 'Включится вместе с обходом';
+  $('#gmSub').textContent = !S.games ? 'Онлайн-игры и Discord. Вход в игры не ломает'
+    : on ? 'Работает. Лаунчеры и античиты не трогает' : 'Включится вместе с обходом';
   $('#tgItem').classList.toggle('is-on', S.tg_on && !tgBad);
   $('#gmItem').classList.toggle('is-on', S.games);
   $('#aiItem').classList.toggle('is-on', S.ai);
   $('#asRow').classList.toggle('is-on', S.autostart);
-  $$('.asSub').forEach(el => el.textContent = S.autostart ? 'Обход включится сам при запуске Windows' : 'Включать обход при запуске Windows');
+  $$('.asSub').forEach(el => el.textContent = S.autostart ? 'Включится сам при запуске Windows' : 'Включать обход при запуске Windows');
   $('#aiSub').textContent = S.ai ? 'Работают без VPN, даже когда Prism закрыт'
     : 'ChatGPT, Gemini, Claude и другие без VPN';
 

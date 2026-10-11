@@ -148,7 +148,62 @@ pub fn parse_bat(text: &str, paths: &ZapretPaths, games: bool) -> Result<Vec<Str
     if joined.contains('%') {
         return Err("В стратегии осталась неизвестная переменная".into());
     }
-    Ok(tokenize(&joined))
+    let args = tokenize(&joined);
+    Ok(if games { games_ipset(args, paths) } else { args })
+}
+
+/// Полный список подсетей от Flowseal (в его service.bat это «IPSet: loaded»).
+pub const GAMES_IPSET: &str = "ipset-all.txt.backup";
+/// Сети издателей игр, лаунчеров и античитов (Riot, Valve, Blizzard, Roblox, EA, Epic и др.).
+/// Игры на них работают без обхода, и Prism их пакеты не меняет, чтобы не ломать вход в игры.
+pub const GAMES_EXCLUDE: &str = "ipset-exclude-games.txt";
+const GAMES_EXCLUDE_BODY: &str = include_str!("../lists/ipset-exclude-games.txt");
+
+/// Игровой режим. Правила для портов 1024-65535 работают только для серверов из полного
+/// списка подсетей и не трогают сети издателей игр и античитов. Правила для сайтов
+/// остаются как были, поэтому игровой режим их не затрагивает.
+fn games_ipset(args: Vec<String>, paths: &ZapretPaths) -> Vec<String> {
+    let lists = paths.lists();
+    let stub = format!("--ipset={}\\ipset-all.txt", lists.display());
+    let full = format!("--ipset={}\\{GAMES_IPSET}", lists.display());
+    let exclude = format!("--ipset-exclude={}\\{GAMES_EXCLUDE}", lists.display());
+    let mut groups: Vec<Vec<String>> = vec![Vec::new()];
+    for a in args {
+        let end = a == "--new";
+        if let Some(g) = groups.last_mut() {
+            g.push(a);
+        }
+        if end {
+            groups.push(Vec::new());
+        }
+    }
+    let mut out = Vec::new();
+    for mut g in groups {
+        let game = g.iter().any(|a| a == "--filter-tcp=1024-65535" || a == "--filter-udp=1024-65535");
+        if game && g.iter().any(|a| *a == stub) {
+            for a in g.iter_mut() {
+                if *a == stub {
+                    *a = full.clone();
+                }
+            }
+            let at = if g.last().map(|s| s == "--new").unwrap_or(false) { g.len() - 1 } else { g.len() };
+            g.insert(at, exclude.clone());
+        }
+        out.extend(g);
+    }
+    out
+}
+
+/// Файлы игрового режима: список исключений обновляется вместе с Prism.
+/// Если полного списка подсетей нет, ставим заглушку, чтобы движок всё равно запустился.
+pub fn ensure_game_lists(paths: &ZapretPaths, log: &Log) {
+    let l = paths.lists();
+    let _ = fs::write(l.join(GAMES_EXCLUDE), GAMES_EXCLUDE_BODY);
+    let full = l.join(GAMES_IPSET);
+    if !full.exists() {
+        log.push("[prism] нет полного списка подсетей, игровой режим работает только для Discord");
+        let _ = fs::write(full, "203.0.113.113/32\r\n");
+    }
 }
 
 /// Создать пользовательские списки так же, как это делает service.bat.
@@ -171,6 +226,13 @@ pub fn kill_stray() {
     run_quiet("taskkill", &["/F", "/IM", "winws.exe"]);
 }
 
+/// Выгрузить драйвер WinDivert, когда обход выключен. Пока драйвер загружен,
+/// некоторые античиты не дают зайти в игру.
+pub fn unload_driver() {
+    run_quiet("sc", &["stop", "WinDivert"]);
+    run_quiet("sc", &["stop", "WinDivert14"]);
+}
+
 #[derive(Default)]
 pub struct Engine {
     child: Option<Child>,
@@ -184,6 +246,9 @@ impl Engine {
         self.stop();
         kill_stray();
         ensure_user_lists(paths);
+        if games {
+            ensure_game_lists(paths, log);
+        }
         let bat = paths.strategies().join(strategy);
         let text = fs::read_to_string(&bat).map_err(|e| format!("Не удалось прочитать стратегию: {e}"))?;
         let args = parse_bat(&text, paths, games)?;
@@ -288,5 +353,13 @@ mod tests {
         assert_eq!(tokenize("--fake-tls=^! --x=\"a b\""), vec!["--fake-tls=!", "--x=a b"]);
         let g = parse_bat(bat, &p, true).unwrap();
         assert_eq!(g[0], "--wf-tcp=80,443,1024-65535");
+        let game = "set \"BIN=%~dp0bin\\\"\r\nstart \"z\" /min \"%BIN%winws.exe\" --wf-udp=443,%GameFilterUDP% ^\r\n--filter-udp=443 --ipset=\"%LISTS%ipset-all.txt\" --new ^\r\n--filter-udp=%GameFilterUDP% --ipset=\"%LISTS%ipset-all.txt\" --dpi-desync=fake --new ^\r\n--filter-tcp=80\r\n";
+        let a = parse_bat(game, &p, true).unwrap();
+        assert!(a[2].ends_with("\\ipset-all.txt"));
+        assert!(a[5].ends_with(GAMES_IPSET));
+        assert!(a[7].ends_with(GAMES_EXCLUDE));
+        assert_eq!(a[8], "--new");
+        let off = parse_bat(game, &p, false).unwrap();
+        assert!(off.iter().all(|x| !x.contains(GAMES_IPSET) && !x.contains(GAMES_EXCLUDE)));
     }
 }

@@ -215,6 +215,7 @@ async fn do_update_zapret(p: &Prism) -> R<bool> {
         r
     };
     engine::kill_stray();
+    engine::unload_driver();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let _ = std::fs::remove_dir_all(&old);
     std::fs::rename(&root, &old).map_err(|e| format!("Не удалось заменить файлы: {e}"))?;
@@ -301,6 +302,7 @@ async fn set_engine(p: State<'_, Prism>, on: bool) -> R<AppState> {
     } else {
         p.inner.lock().unwrap().engine.stop();
         engine::kill_stray();
+        engine::unload_driver();
     }
     {
         let mut i = p.inner.lock().unwrap();
@@ -658,6 +660,7 @@ fn shutdown(app: &AppHandle) {
         i.proxy.stop();
     }
     engine::kill_stray();
+    engine::unload_driver();
 }
 
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
