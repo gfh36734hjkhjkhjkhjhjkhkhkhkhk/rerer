@@ -7,7 +7,7 @@ const mock = (() => {
   const st = { engine_on:false, strategy:'general.bat', games:false, ai:false, tg_on:false, autostart:false, tray:true,
     tg:{host:'127.0.0.1',port:1443,secret:'7f3a9c41e0b25d88f6c1a04e93b7d2aa',link:'tg://proxy?server=127.0.0.1&port=1443&secret=dd7f3a9c41e0b25d88f6c1a04e93b7d2aa'},
     strategies:[['general.bat','Основная','Рекомендуемая, начните с неё'],['general (ALT).bat','ALT','Альтернативная разрезка пакетов'],['general (ALT2).bat','ALT2','Альтернативная разрезка пакетов'],['general (FAKE TLS AUTO).bat','FAKE TLS AUTO','Поддельное TLS-приветствие, часто помогает на мобильном интернете'],['general (SIMPLE FAKE).bat','SIMPLE FAKE','Простые фейковые пакеты']].map(([id,name,desc])=>({id,name,desc})),
-    user_sites:['rutracker.org'], builtin_sites:142, versions:['zapret-discord-youtube 1.10.3 (winws из zapret v72.9)','tg-ws-proxy 1.11.1'] };
+    user_sites:['rutracker.org'], builtin_sites:142, auto_update:true, app_version:'0.2.0', zapret_version:'1.10.3', portable:false, versions:['zapret-discord-youtube 1.10.3 (winws из zapret v72.9)','tg-ws-proxy 1.11.1'] };
   const wait = ms => new Promise(r => setTimeout(r, ms));
   return async (cmd, a = {}) => {
     await wait(300);
@@ -26,6 +26,10 @@ const mock = (() => {
         for (const s of st.strategies) { emit('pick-progress',{id:s.id,state:'wait',ms:0}); await wait(400); emit('pick-progress',{id:s.id,state:s.id.includes('ALT2')?'bad':'ok',ms:100+Math.round(Math.random()*150)}); }
         st.strategy = 'general.bat'; st.engine_on = true; break;
       case 'get_log': return '[prism] предпросмотр в браузере';
+      case 'set_auto_update': st.auto_update = a.on; break;
+      case 'check_updates': return { app:{current:'0.2.0',latest:'0.3.0',available:true}, zapret:{current:'1.10.3',latest:'1.10.3',available:false} };
+      case 'update_zapret': throw 'У вас уже последняя версия обходов';
+      case 'update_app': return null;
       case 'open_tg_link': case 'close_window': return null;
     }
     return JSON.parse(JSON.stringify(st));
@@ -80,15 +84,16 @@ orb.onclick = async () => {
 };
 
 // Переключатели
-const modCmd = { tg:'set_tg', games:'set_games', ai:'set_ai', autostart:'set_autostart', tray:'set_tray' };
+const modCmd = { tg:'set_tg', games:'set_games', ai:'set_ai', autostart:'set_autostart', tray:'set_tray', auto_update:'set_auto_update' };
 const modText = {
   tg: on => on ? 'Прокси для Telegram включён' : 'Прокси для Telegram выключен',
   games: on => on ? 'Режим для игр включён' : 'Режим для игр выключен',
   ai: on => on ? 'Нейросети открыты' : 'Доступ к нейросетям выключен',
   autostart: on => on ? 'Prism будет запускаться вместе с Windows' : 'Автозапуск выключен',
   tray: on => on ? 'Крестик будет сворачивать в трей' : 'Крестик будет закрывать Prism',
+  auto_update: on => on ? 'Автообновление включено' : 'Автообновление выключено',
 };
-const modVal = { tg: () => S.tg_on, games: () => S.games, ai: () => S.ai, autostart: () => S.autostart, tray: () => S.tray };
+const modVal = { tg: () => S.tg_on, games: () => S.games, ai: () => S.ai, autostart: () => S.autostart, tray: () => S.tray, auto_update: () => S.auto_update };
 $$('.sw[data-mod]').forEach(sw => sw.onclick = async () => {
   const m = sw.dataset.mod, on = !modVal[m]();
   const group = $$(`.sw[data-mod="${m}"]`);
@@ -186,9 +191,45 @@ function render() {
   $$('#aiList .badge').forEach(b => { b.className = 'badge ' + (S.ai ? 'ok' : ''); b.textContent = S.ai ? 'Открыт' : 'Выключено'; });
   const live = { home: on, tg: S.tg_on, games: S.games, ai: S.ai };
   for (const k in live) $(`#d-${k}`).parentElement.classList.toggle('live', live[k]);
-  $('#versions').textContent = S.versions.join(', ');
+  drawUpdates();
   drawStrats(); drawSites();
 }
+
+
+// Обновления
+let U = null;
+function drawUpdates() {
+  if (!S) return;
+  $('#appVer').textContent = `Версия ${S.app_version}` + (U && U.app.available ? `. Доступна ${U.app.latest}` : U ? '. Последняя версия' : '');
+  $('#zapVer').textContent = `Версия ${S.zapret_version || '—'}` + (U && U.zapret.available ? `. Доступна ${U.zapret.latest}` : U ? '. Последняя версия' : '');
+  $('#appUpd').textContent = U && U.app.available ? (S.portable ? 'Скачать' : 'Обновить') : 'Проверить';
+  $('#zapUpd').textContent = U && U.zapret.available ? 'Обновить' : 'Проверить';
+  const bar = $('#updBar');
+  bar.hidden = !(U && U.app.available);
+  if (U && U.app.available) $('#updText').textContent = `Вышла новая версия Prism ${U.app.latest}`;
+}
+async function checkUpdates(quiet) {
+  try { U = await invoke('check_updates'); drawUpdates(); if (!quiet && !U.app.available && !U.zapret.available) toast('Всё обновлено'); }
+  catch (e) { if (!quiet) toast(String(e)); }
+}
+async function updateApp(btn) {
+  if (!U || !U.app.available) return checkUpdates(false);
+  btn.disabled = true; btn.textContent = S.portable ? 'Открываю…' : 'Скачиваю…';
+  try { await invoke('update_app'); if (S.portable) toast('Скачайте новую версию со страницы релиза'); else toast('Открываю установщик'); }
+  catch (e) { toast(String(e)); }
+  btn.disabled = false; drawUpdates();
+}
+$('#appUpd').onclick = e => updateApp(e.currentTarget);
+$('#updBarBtn').onclick = e => updateApp(e.currentTarget);
+$('#zapUpd').onclick = async e => {
+  const b = e.currentTarget;
+  if (!U || !U.zapret.available) return checkUpdates(false);
+  b.disabled = true; b.textContent = 'Обновляю…';
+  try { await call('update_zapret', {}, 'Обходы обновлены'); U.zapret.available = false; U.zapret.current = S.zapret_version; } catch {}
+  b.disabled = false; drawUpdates(); checkSoon();
+};
+listen('updates', e => { U = e.payload; drawUpdates(); });
+listen('zapret-updated', e => toast(`Обходы обновлены до версии ${e.payload}`));
 
 listen('state-changed', () => refresh().then(checkSoon));
 refresh().then(checkSoon);

@@ -169,6 +169,8 @@ h2{font-size:17px;font-weight:600;margin:28px 0 12px}
 .log{white-space:pre-wrap;word-break:break-all;font-family:Consolas,"Cascadia Mono",monospace;font-size:12.5px;line-height:1.5;color:var(--ink2);max-height:260px;overflow:auto;padding:14px}
 #strats{max-height:none}
 .err{color:#FFB3B3}
+.update-bar{display:flex;align-items:center;gap:16px;justify-content:space-between;border-radius:18px;padding:10px 10px 10px 20px;margin-bottom:22px;font-size:15px;font-weight:500}
+.update-bar[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -194,6 +196,7 @@ h2{font-size:17px;font-weight:600;margin:28px 0 12px}
   </nav>
   <main class="main">
     <section class="page on" id="p-home">
+      <div class="update-bar glass" id="updBar" hidden><span id="updText">Вышла новая версия Prism</span><button class="btn primary" id="updBarBtn">Обновить</button></div>
       <div class="hero">
         <button class="orb" id="orb" aria-pressed="false" aria-label="Включить обход"><span class="core"><svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></span></button>
         <div>
@@ -285,8 +288,12 @@ h2{font-size:17px;font-weight:600;margin:28px 0 12px}
         <div class="row"><div class="t"><b>Запускать вместе с Windows</b><span>Prism откроется в трее и включит то, что было включено</span></div><button class="sw" role="switch" aria-checked="false" data-mod="autostart" aria-label="Автозапуск"></button></div>
         <div class="row"><div class="t"><b>Сворачивать в трей</b><span>Крестик прячет окно, а обход продолжает работать</span></div><button class="sw" role="switch" aria-checked="true" data-mod="tray" aria-label="Сворачивать в трей"></button></div>
       </div>
-      <h2>О программе</h2>
-      <div class="panel glass"><div class="row"><div class="t"><b>Prism 0.1.0</b><span id="versions"></span></div></div></div>
+      <h2>Обновления</h2>
+      <div class="panel glass">
+        <div class="row"><div class="t"><b>Prism</b><span id="appVer">Версия …</span></div><button class="btn" id="appUpd">Проверить</button></div>
+        <div class="row"><div class="t"><b>Обходы от Flowseal</b><span id="zapVer">Версия …</span></div><button class="btn" id="zapUpd">Проверить</button></div>
+        <div class="row"><div class="t"><b>Обновлять автоматически</b><span>Обходы и адреса нейросетей обновляются сами при запуске. О новой версии Prism придёт уведомление</span></div><button class="sw" role="switch" aria-checked="true" data-mod="auto_update" aria-label="Обновлять автоматически"></button></div>
+      </div>
       <h2>Журнал</h2>
       <div class="panel glass"><div class="log" id="log">Пока пусто</div></div>
       <div class="bar"><button class="btn" id="logRefresh">Обновить журнал</button></div>

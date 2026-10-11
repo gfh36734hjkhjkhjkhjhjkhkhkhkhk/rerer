@@ -228,7 +228,9 @@ impl Engine {
 pub fn install(resource: &Path, target: &Path, log: &Log) -> Result<(), String> {
     let src_ver = fs::read_to_string(resource.join("version.txt")).unwrap_or_default();
     let dst_ver = fs::read_to_string(target.join("version.txt")).unwrap_or_default();
-    if !src_ver.is_empty() && src_ver == dst_ver && target.join("bin").join("winws.exe").exists() {
+    let has_engine = target.join("bin").join("winws.exe").exists();
+    // Не откатываем более новую версию, которую уже скачало автообновление.
+    if has_engine && !crate::updates::newer(&src_ver, &dst_ver) {
         return Ok(());
     }
     kill_stray();

@@ -15,6 +15,7 @@ pub struct Settings {
     pub tg_secret: String,
     pub autostart: bool,
     pub tray: bool,
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -29,6 +30,7 @@ impl Default for Settings {
             tg_secret: String::new(),
             autostart: false,
             tray: true,
+            auto_update: true,
         }
     }
 }

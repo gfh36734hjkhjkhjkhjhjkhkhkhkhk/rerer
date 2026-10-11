@@ -5,6 +5,7 @@ mod hosts;
 mod probe;
 mod settings;
 mod tgproxy;
+mod updates;
 mod util;
 
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ use settings::Settings;
 use tgproxy::Proxy;
 use util::{run_quiet, Log};
 
-const ZAPRET_VERSION: &str = "zapret-discord-youtube 1.10.3 (winws из zapret v72.9)";
+const ZAPRET_VERSION: &str = "обходы: Flowseal zapret-discord-youtube";
 const TG_VERSION: &str = "tg-ws-proxy 1.11.1";
 const TASK_NAME: &str = "Prism";
 
@@ -69,6 +70,10 @@ struct AppState {
     user_sites: Vec<String>,
     builtin_sites: usize,
     versions: Vec<&'static str>,
+    auto_update: bool,
+    app_version: &'static str,
+    zapret_version: String,
+    portable: bool,
 }
 
 type R<T> = Result<T, String>;
@@ -91,6 +96,10 @@ fn snapshot(p: &Prism) -> AppState {
         user_sites: read_user_sites(&p.zapret),
         builtin_sites: count_lines(&p.zapret.lists().join("list-general.txt")),
         versions: vec![ZAPRET_VERSION, TG_VERSION],
+        auto_update: s.auto_update,
+        app_version: env!("CARGO_PKG_VERSION"),
+        zapret_version: zapret_version(&p.zapret),
+        portable: is_portable(),
     }
 }
 
@@ -136,6 +145,144 @@ async fn start_engine(p: &Prism) -> R<()> {
         return Err("Обход не запустился. Откройте журнал в настройках, там написана причина.".into());
     }
     Ok(())
+}
+
+
+fn zapret_version(z: &ZapretPaths) -> String {
+    std::fs::read_to_string(z.root.join("version.txt"))
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches("flowseal-")
+        .to_string()
+}
+
+/// Установленная версия лежит рядом с uninstall.exe, портативная — нет.
+fn is_portable() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| !d.join("uninstall.exe").exists()))
+        .unwrap_or(true)
+}
+
+fn open_url(url: &str) {
+    let _ = util::hidden("rundll32").args(["url.dll,FileProtocolHandler", url]).spawn();
+}
+
+async fn check_info(p: &Prism) -> R<updates::Info> {
+    let (app_r, zap_r) = tokio::join!(updates::latest(updates::APP_REPO), updates::latest(updates::ZAPRET_REPO));
+    let cur_app = env!("CARGO_PKG_VERSION").to_string();
+    let cur_zap = zapret_version(&p.zapret);
+    let mut info = updates::Info::default();
+    info.app.current = cur_app.clone();
+    info.zapret.current = cur_zap.clone();
+    if let Ok(r) = &app_r {
+        info.app.latest = r.tag_name.trim_start_matches('v').to_string();
+        info.app.available = updates::newer(&r.tag_name, &cur_app) && updates::app_asset(r).is_some();
+    }
+    if let Ok(r) = &zap_r {
+        info.zapret.latest = r.tag_name.trim_start_matches('v').to_string();
+        info.zapret.available = updates::newer(&r.tag_name, &cur_zap) && updates::zapret_asset(r).is_some();
+    }
+    if let (Err(e), Err(_)) = (&app_r, &zap_r) {
+        return Err(e.clone());
+    }
+    Ok(info)
+}
+
+/// Скачать и установить новую версию обходов Flowseal. Возвращает true, если обновились.
+async fn do_update_zapret(p: &Prism) -> R<bool> {
+    let rel = updates::latest(updates::ZAPRET_REPO).await?;
+    let current = zapret_version(&p.zapret);
+    if !updates::newer(&rel.tag_name, &current) {
+        return Ok(false);
+    }
+    let asset = updates::zapret_asset(&rel).ok_or("В релизе Flowseal нет архива zapret")?.clone();
+    p.log.push(format!("[prism] скачиваю обходы Flowseal {}", rel.tag_name));
+    let bytes = updates::download_verified(&asset).await?;
+    let root = p.zapret.root.clone();
+    let fresh = root.with_file_name("zapret-new");
+    let old = root.with_file_name("zapret-old");
+    updates::unpack_zapret(&bytes, &fresh, &rel.tag_name)?;
+    updates::carry_user_lists(&root, &fresh);
+    let running = {
+        let mut i = p.inner.lock().unwrap();
+        let r = i.engine.alive();
+        i.engine.stop();
+        r
+    };
+    engine::kill_stray();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let _ = std::fs::remove_dir_all(&old);
+    std::fs::rename(&root, &old).map_err(|e| format!("Не удалось заменить файлы: {e}"))?;
+    if let Err(e) = std::fs::rename(&fresh, &root) {
+        let _ = std::fs::rename(&old, &root);
+        return Err(format!("Не удалось заменить файлы: {e}"));
+    }
+    let _ = std::fs::remove_dir_all(&old);
+    {
+        let mut i = p.inner.lock().unwrap();
+        if !p.zapret.strategies().join(&i.settings.strategy).exists() {
+            i.settings.strategy = "general.bat".into();
+            p.save(&i);
+        }
+    }
+    p.log.push(format!("[prism] обходы обновлены до {}", rel.tag_name));
+    if running {
+        start_engine(p).await?;
+    }
+    Ok(true)
+}
+
+async fn refresh_ai_hosts(p: &Prism) -> R<()> {
+    let list = hosts::download().await?;
+    let _ = std::fs::write(&p.hosts_cache, &list);
+    hosts::enable(&list)?;
+    p.log.push("[prism] список адресов для нейросетей обновлён");
+    Ok(())
+}
+
+#[tauri::command]
+async fn check_updates(p: State<'_, Prism>) -> R<updates::Info> {
+    check_info(&p).await
+}
+
+#[tauri::command]
+async fn update_zapret(p: State<'_, Prism>) -> R<AppState> {
+    if !do_update_zapret(&p).await? {
+        return Err("У вас уже последняя версия обходов".into());
+    }
+    Ok(snapshot(&p))
+}
+
+#[tauri::command]
+async fn update_app(app: AppHandle, p: State<'_, Prism>) -> R<()> {
+    let rel = updates::latest(updates::APP_REPO).await?;
+    if !updates::newer(&rel.tag_name, env!("CARGO_PKG_VERSION")) {
+        return Err("У вас уже последняя версия Prism".into());
+    }
+    if is_portable() {
+        open_url(&rel.html_url);
+        return Ok(());
+    }
+    let asset = updates::app_asset(&rel).ok_or("В релизе нет установщика")?.clone();
+    p.log.push(format!("[prism] скачиваю Prism {}", rel.tag_name));
+    let bytes = updates::download_verified(&asset).await?;
+    let path = std::env::temp_dir().join(&asset.name);
+    std::fs::write(&path, bytes).map_err(|e| format!("Не удалось сохранить установщик: {e}"))?;
+    std::process::Command::new(&path).spawn().map_err(|e| format!("Не удалось запустить установщик: {e}"))?;
+    shutdown(&app);
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_auto_update(p: State<'_, Prism>, on: bool) -> R<AppState> {
+    {
+        let mut i = p.inner.lock().unwrap();
+        i.settings.auto_update = on;
+        p.save(&i);
+    }
+    Ok(snapshot(&p))
 }
 
 #[tauri::command]
@@ -501,6 +648,31 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         let _ = handle.emit("state-changed", ());
+
+        // Фоновые обновления через несколько секунд после запуска.
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        let (auto, ai) = {
+            let i = p.inner.lock().unwrap();
+            (i.settings.auto_update, i.settings.ai)
+        };
+        if auto {
+            match do_update_zapret(&p).await {
+                Ok(true) => {
+                    let _ = handle.emit("zapret-updated", zapret_version(&p.zapret));
+                    let _ = handle.emit("state-changed", ());
+                }
+                Ok(false) => {}
+                Err(e) => p.log.push(format!("[prism] автообновление обходов: {e}")),
+            }
+            if ai {
+                if let Err(e) = refresh_ai_hosts(&p).await {
+                    p.log.push(format!("[prism] {e}"));
+                }
+            }
+        }
+        if let Ok(info) = check_info(&p).await {
+            let _ = handle.emit("updates", info);
+        }
     });
     Ok(())
 }
@@ -520,7 +692,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state, set_engine, set_strategy, set_games, set_ai, set_tg, open_tg_link,
-            add_site, remove_site, check_services, auto_pick, set_autostart, set_tray, get_log, close_window
+            add_site, remove_site, check_services, auto_pick, set_autostart, set_tray, get_log, close_window,
+            check_updates, update_zapret, update_app, set_auto_update
         ])
         .build(tauri::generate_context!())
         .expect("ошибка запуска Prism");
