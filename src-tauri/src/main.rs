@@ -479,17 +479,21 @@ async fn auto_pick(app: AppHandle, p: State<'_, Prism>) -> R<AppState> {
         let _ = app.emit("pick-progress", Progress { id: s.id.clone(), state: "wait", ms: 0 });
         p.inner.lock().unwrap().settings.strategy = s.id.clone();
         let started = start_engine(&p).await.is_ok();
+        // Оценка важнее «работает/не работает»: для YouTube считаем, сколько адресов
+        // ответило из проверенных. Стратегия, где открывается сайт, но не видео, хуже.
         let (score, ms) = if started {
             let r = probe::services(4).await;
-            let ok = [r.discord.ok, r.youtube.ok].iter().filter(|x| **x).count();
+            let svc = [r.discord, r.youtube];
+            let ok = svc.iter().filter(|x| x.ok).count();
+            let adr = svc.iter().map(|x| x.good as usize).sum::<usize>();
             let ms = if ok > 0 { (r.discord.ms + r.youtube.ms) / ok as u64 } else { 0 };
-            (ok, ms)
+            (ok * 100 + adr, ms)
         } else {
             (0, 0)
         };
-        let state = if score == 2 { "ok" } else if score == 1 { "part" } else { "bad" };
+        let state = if score >= 200 { "ok" } else if score > 0 { "part" } else { "bad" };
         let _ = app.emit("pick-progress", Progress { id: s.id.clone(), state, ms });
-        p.log.push(format!("[prism] {}: работает {score} из 2, {ms} мс", s.name));
+        p.log.push(format!("[prism] {}: оценка {score}, {ms} мс", s.name));
         let better = match &best {
             None => score > 0,
             Some((bs, bms, _)) => score > *bs || (score == *bs && ms < *bms),
