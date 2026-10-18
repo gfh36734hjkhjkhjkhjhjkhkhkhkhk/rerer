@@ -483,7 +483,7 @@ async fn auto_pick(app: AppHandle, p: State<'_, Prism>) -> R<AppState> {
         // ответило из проверенных. Стратегия, где открывается сайт, но не видео, хуже.
         let (score, ms) = if started {
             let r = probe::services(4).await;
-            let svc = [r.discord, r.youtube];
+            let svc = [&r.discord, &r.youtube];
             let ok = svc.iter().filter(|x| x.ok).count();
             let adr = svc.iter().map(|x| x.good as usize).sum::<usize>();
             let ms = if ok > 0 { (r.discord.ms + r.youtube.ms) / ok as u64 } else { 0 };
