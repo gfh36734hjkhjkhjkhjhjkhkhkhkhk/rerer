@@ -73,16 +73,38 @@ async function refresh() { S = await invoke('get_state'); render(); }
 $('#wMin').onclick = () => T && T.window.getCurrentWindow().minimize();
 $('#wClose').onclick = () => invoke('close_window');
 
-// Разделы
+// Разделы: ползунок плавно переезжает к выбранной вкладке
+function ink() {
+  const nav = $('.seg'), cur = $('.seg button[aria-current=page]'), line = $('.seg-ink');
+  if (!nav || !cur || !line) return;
+  line.style.setProperty('--x', cur.offsetLeft + 'px');
+  line.style.width = cur.offsetWidth + 'px';
+}
 function go(page) {
   $$('.seg button').forEach(b => b.dataset.go === page ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
   $$('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + page));
+  ink();
   if (page === 'set') loadLog();
 }
 $$('.seg button').forEach(b => b.onclick = () => go(b.dataset.go));
+addEventListener('resize', ink);
+document.fonts && document.fonts.ready.then(ink);
+ink();
 
 // Главный переключатель
-$('#power').onclick = async () => {
+const powerBtn = $('#power');
+powerBtn.addEventListener('pointerdown', e => {
+  const r = powerBtn.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const d = 2 * Math.hypot(Math.max(x, r.width - x), Math.max(y, r.height - y));
+  const el = document.createElement('span');
+  el.className = 'ripple';
+  el.style.cssText = `left:${x - d / 2}px;top:${y - d / 2}px;width:${d}px;height:${d}px`;
+  powerBtn.appendChild(el);
+  el.classList.add('go');
+  setTimeout(() => el.remove(), 650);
+});
+powerBtn.onclick = async () => {
   if (busy || picking || !S) return;
   const on = !S.engine_on;
   busy = { text: on ? 'Включаю…' : 'Выключаю…', target: on }; invalidate(); render();
@@ -294,6 +316,7 @@ function render() {
   drawUpdates();
   drawSites();
   drawClock();
+  ink();
 }
 
 // Обновления
