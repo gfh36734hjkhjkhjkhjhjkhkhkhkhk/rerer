@@ -73,17 +73,18 @@ svg{display:block}
 .hero-main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:8px 0 26px}
 .dial{position:relative;width:216px;height:216px;margin-bottom:30px;display:grid;place-items:center;isolation:isolate}
 /* Мягкое свечение под кнопкой: включается вместе с обходом */
-.dial::before{content:"";position:absolute;inset:-14%;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.16),rgba(255,255,255,.04) 42%,transparent 68%);opacity:0;filter:blur(14px);transform:scale(.9);transition:opacity .6s ease,transform .8s cubic-bezier(.2,.8,.2,1);z-index:-1}
+.dial::before{content:"";position:absolute;inset:-14%;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.16),rgba(255,255,255,.04) 42%,transparent 68%);opacity:0;filter:blur(14px);transform:scale(.9);transition:opacity .6s ease,transform .8s cubic-bezier(.2,.8,.2,1);z-index:-1;pointer-events:none}
 body.on .dial::before{opacity:1;transform:scale(1)}
 /* Тонкое внешнее кольцо-шкала */
-.dial::after{content:"";position:absolute;inset:-8px;border-radius:50%;border:1px solid rgba(255,255,255,.09);opacity:1;transition:border-color .4s}
+.dial::after{content:"";position:absolute;inset:-8px;border-radius:50%;border:1px solid rgba(255,255,255,.09);opacity:1;transition:border-color .4s;pointer-events:none}
 body.on .dial::after{border-color:rgba(255,255,255,.1)}
-.ring{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg);fill:none;stroke-width:1.5;opacity:0;transition:opacity .3s}
+.ring{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg);fill:none;stroke-width:1.5;opacity:0;transition:opacity .3s;pointer-events:none}
 .ring .track{stroke:var(--line)}
 .ring .arc{stroke:var(--fg);stroke-linecap:round;stroke-dasharray:0 100;transition:stroke-dasharray .5s cubic-bezier(.3,.8,.2,1)}
 body.busy .ring,body.pick .ring{opacity:1}
-body.busy .ring .arc{stroke-dasharray:18 100}
-body.busy .ring{animation:spin 1.1s linear infinite}
+body.busy .dial::after,body.pick .dial::after{border-color:rgba(255,255,255,.03)}
+body.busy .ring .arc{stroke-dasharray:14 100;stroke-width:2}
+body.busy .ring,body.pick .ring{animation:spin 1.05s linear infinite}
 @keyframes spin{from{transform:rotate(-90deg)}to{transform:rotate(270deg)}}
 .knob{position:relative;width:172px;height:172px;padding:0;aspect-ratio:1;display:grid;place-items:center;border:1px solid #3A3A44;border-radius:50%;background:radial-gradient(120% 120% at 50% 0%,#1E1E23 0%,#141418 55%,#0C0C0F 100%);color:var(--fg);cursor:pointer;overflow:hidden;box-shadow:var(--lift),0 2px 0 rgba(0,0,0,.7),0 26px 50px -30px rgba(0,0,0,.9);transition:background .45s ease,color .35s ease,border-color .35s ease,transform .35s cubic-bezier(.2,.9,.2,1),box-shadow .45s ease}
 /* Блик сверху и тонкая внутренняя кромка — ощущение стекла */
@@ -93,7 +94,7 @@ body.busy .ring{animation:spin 1.1s linear infinite}
 .knob svg path{stroke-dasharray:40;stroke-dashoffset:0;transition:stroke-dasharray .6s ease}
 .knob:hover:not(:disabled){border-color:var(--edge-hi);transform:translateY(-2px) scale(1.012);box-shadow:var(--lift),0 2px 0 rgba(0,0,0,.7),0 34px 60px -30px rgba(0,0,0,.95)}
 .knob:hover:not(:disabled) svg{transform:scale(1.06)}
-.knob:active:not(:disabled){transform:translateY(0) scale(.962);transition-duration:.09s}
+.knob:active:not(:disabled){transform:scale(.955);transition-duration:.07s}
 /* Волна от точки нажатия */
 .knob .ripple{position:absolute;border-radius:50%;pointer-events:none;background:radial-gradient(circle,rgba(255,255,255,.22),rgba(255,255,255,0) 70%);transform:scale(0);opacity:0}
 body.on .knob .ripple{background:radial-gradient(circle,rgba(0,0,0,.16),rgba(0,0,0,0) 70%)}
@@ -105,11 +106,13 @@ body.on .knob .ripple{background:radial-gradient(circle,rgba(0,0,0,.16),rgba(0,0
 body.on .knob{background:#fff;border-color:#fff;color:var(--bg);box-shadow:0 0 0 1px rgba(255,255,255,.16),0 2px 0 rgba(0,0,0,.5),0 34px 80px -30px rgba(255,255,255,.42)}
 body.on .knob::before{opacity:0}
 
-body.on .knob svg{transform:rotate(180deg)}
 body.on .knob:not(:disabled){animation:breathe 4.6s ease-in-out infinite}
 @keyframes breathe{0%,100%{box-shadow:0 0 0 1px rgba(255,255,255,.16),0 2px 0 rgba(0,0,0,.5),0 34px 80px -30px rgba(255,255,255,.42)}50%{box-shadow:0 0 0 1px rgba(255,255,255,.22),0 2px 0 rgba(0,0,0,.5),0 40px 100px -28px rgba(255,255,255,.58)}}
-body.busy .knob,body.pick .knob{color:var(--fg2)}
-body.busy .knob svg{animation:pulse 1.3s ease-in-out infinite}
+body.busy .knob,body.pick .knob,body.on.busy .knob,body.on.pick .knob{color:var(--fg);background:radial-gradient(120% 120% at 50% 0%,#1E1E23 0%,#141418 55%,#0C0C0F 100%);border-color:#3A3A44;box-shadow:var(--lift),0 2px 0 rgba(0,0,0,.7),0 26px 50px -30px rgba(0,0,0,.9);animation:none}
+body.busy .knob:hover,body.pick .knob:hover{transform:none}
+body.on.busy .knob::before,body.on.pick .knob::before{opacity:1}
+body.busy .ring .track{stroke:#2A2A31}
+body.busy .ring .arc,body.pick .ring .arc{stroke-dasharray:14 100;stroke-width:2}
 @keyframes pulse{50%{opacity:.45;transform:scale(.94)}}
 h1{margin:0;font-size:29px;line-height:1.12;font-weight:500;letter-spacing:-.035em}
 .state-sub{max-width:280px;margin:11px 0 0;color:var(--fg2);font-size:13.5px;line-height:1.45}
@@ -228,7 +231,14 @@ dialog::backdrop{background:rgba(0,0,0,.74);backdrop-filter:blur(6px)}
 ::-webkit-scrollbar-thumb:hover{background:#3C3C44}
 
 @media (max-width:720px){.dash{gap:30px;grid-template-columns:minmax(220px,250px) minmax(0,1fr)}.page{padding:26px 26px 30px}.dial{width:190px;height:190px}}
-@media (prefers-reduced-motion: reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
+@media (prefers-reduced-motion: reduce){
+  body::before{display:none}
+  body.on .knob:not(:disabled){animation:none}
+  .svc.wait .dot{animation:none}
+  .knob:hover:not(:disabled){transform:none}
+  .page.on .list > *,.page.on .col > *,.page.on .list > .group{animation-delay:0s}
+  .btn.primary:hover:not(:disabled)::after{animation:none}
+}
 </style>
 </head>
 <body>
