@@ -206,9 +206,23 @@ pub fn ensure_game_lists(paths: &ZapretPaths, log: &Log) {
     }
 }
 
+/// Список подсетей для правил по IP: как и service.bat Flowseal, подставляем
+/// полный список из ipset-all.txt.backup. В поставке ipset-all.txt — заглушка
+/// из одного адреса, и без этого правила по IP (в том числе для видео и QUIC)
+/// молча не работают.
+fn ensure_ipset_all(l: &Path) {
+    let full = l.join("ipset-all.txt");
+    let backup = l.join("ipset-all.txt.backup");
+    let placeholder = fs::read_to_string(&full).map(|t| t.trim() == "203.0.113.113/32").unwrap_or(true);
+    if placeholder && backup.exists() {
+        let _ = fs::copy(&backup, &full);
+    }
+}
+
 /// Создать пользовательские списки так же, как это делает service.bat.
 pub fn ensure_user_lists(paths: &ZapretPaths) {
     let l = paths.lists();
+    ensure_ipset_all(&l);
     let files = [
         ("ipset-exclude-user.txt", "203.0.113.113/32\r\n"),
         ("list-general-user.txt", "# Never leave this file empty\r\ndomain.example.abc\r\n"),
@@ -340,6 +354,19 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fills_ipset_all_from_backup() {
+        let dir = std::env::temp_dir().join("prism-ipset-test");
+        let l = dir.join("lists");
+        let _ = fs::create_dir_all(&l);
+        let _ = fs::write(l.join("ipset-all.txt"), "203.0.113.113/32\r\n");
+        let _ = fs::write(l.join("ipset-all.txt.backup"), "1.0.0.0/24\r\n8.8.8.0/24\r\n");
+        ensure_user_lists(&ZapretPaths { root: dir.clone() });
+        let body = fs::read_to_string(l.join("ipset-all.txt")).unwrap();
+        assert!(body.contains("1.0.0.0/24"));
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn parses_flowseal_bat() {

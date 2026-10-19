@@ -14,7 +14,7 @@ pub struct Check {
     pub total: u8,
 }
 
-fn client(timeout: u64) -> reqwest::Client {
+pub fn client(timeout: u64) -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout))
         .connect_timeout(Duration::from_secs(timeout))
@@ -70,18 +70,42 @@ pub struct Services {
 
 pub async fn services(timeout: u64) -> Services {
     let c = client(timeout);
-    let (discord, youtube) = tokio::join!(
-        any(&c, &[
-            "https://discord.com/api/v9/experiments",
-            "https://gateway.discord.gg/?v=10&encoding=json",
-        ]),
-        any(&c, &[
-            "https://www.youtube.com/generate_204",
-            "https://redirector.googlevideo.com/report_mapping?di=no",
-            "https://youtubei.googleapis.com/youtubei/v1/visitor_id",
-        ]),
-    );
+    let (discord, youtube) = tokio::join!(discord_checks(&c), youtube_checks(&c));
     Services { discord, youtube }
+}
+
+pub async fn discord_checks(c: &reqwest::Client) -> Check {
+    any(c, &[
+        "https://discord.com/api/v9/experiments",
+        "https://gateway.discord.gg/?v=10&encoding=json",
+    ])
+    .await
+}
+
+pub async fn youtube_checks(c: &reqwest::Client) -> Check {
+    any(c, &[
+        "https://www.youtube.com/generate_204",
+        "https://redirector.googlevideo.com/report_mapping?di=no",
+        "https://youtubei.googleapis.com/youtubei/v1/visitor_id",
+    ])
+    .await
+}
+
+/// Какие из адресов YouTube не ответили. Нужно для журнала: видно, что именно
+/// режет провайдер — сайт, метаданные или видеосерверы.
+pub async fn youtube_failed(c: &reqwest::Client) -> Vec<&'static str> {
+    let urls = [
+        ("сайт", "https://www.youtube.com/generate_204"),
+        ("видеосервер", "https://redirector.googlevideo.com/report_mapping?di=no"),
+        ("api", "https://youtubei.googleapis.com/youtubei/v1/visitor_id"),
+    ];
+    let mut out = Vec::new();
+    for (name, url) in urls {
+        if !http(c, url).await.ok {
+            out.push(name);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

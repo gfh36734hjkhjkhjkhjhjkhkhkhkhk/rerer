@@ -481,19 +481,29 @@ async fn auto_pick(app: AppHandle, p: State<'_, Prism>) -> R<AppState> {
         let started = start_engine(&p).await.is_ok();
         // Оценка важнее «работает/не работает»: для YouTube считаем, сколько адресов
         // ответило из проверенных. Стратегия, где открывается сайт, но не видео, хуже.
-        let (score, ms) = if started {
+        let (score, ms, failed_yt) = if started {
             let r = probe::services(4).await;
             let svc = [&r.discord, &r.youtube];
             let ok = svc.iter().filter(|x| x.ok).count();
             let adr = svc.iter().map(|x| x.good as usize).sum::<usize>();
             let ms = if ok > 0 { (r.discord.ms + r.youtube.ms) / ok as u64 } else { 0 };
-            (ok * 100 + adr, ms)
+            // Что именно не открылось: сайт, видеосервер или api.
+            let failed = if r.youtube.total > r.youtube.good {
+                probe::youtube_failed(&probe::client(4)).await
+            } else {
+                Vec::new()
+            };
+            (ok * 100 + adr, ms, failed.join(", "))
         } else {
-            (0, 0)
+            (0, 0, String::new())
         };
         let state = if score >= 200 { "ok" } else if score > 0 { "part" } else { "bad" };
         let _ = app.emit("pick-progress", Progress { id: s.id.clone(), state, ms });
-        p.log.push(format!("[prism] {}: оценка {score}, {ms} мс", s.name));
+        p.log.push(format!(
+            "[prism] {}: оценка {score}, {ms} мс{}",
+            s.name,
+            if failed_yt.is_empty() { String::new() } else { format!(", YouTube не открылся: {failed_yt}") }
+        ));
         let better = match &best {
             None => score > 0,
             Some((bs, bms, _)) => score > *bs || (score == *bs && ms < *bms),
