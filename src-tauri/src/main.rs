@@ -482,7 +482,13 @@ async fn auto_pick(app: AppHandle, p: State<'_, Prism>) -> R<AppState> {
         // Оценка важнее «работает/не работает»: для YouTube считаем, сколько адресов
         // ответило из проверенных. Стратегия, где открывается сайт, но не видео, хуже.
         let (score, ms, failed_yt) = if started {
-            let r = probe::services(4).await;
+            let mut r = probe::services(4).await;
+            // Сразу после перезапуска движка часть соединений ещё не поднялась.
+            // Нулевой результат повторяем один раз, чтобы не отбросить рабочую стратегию.
+            if !r.discord.ok && !r.youtube.ok {
+                tokio::time::sleep(Duration::from_millis(900)).await;
+                r = probe::services(4).await;
+            }
             let svc = [&r.discord, &r.youtube];
             let ok = svc.iter().filter(|x| x.ok).count();
             let adr = svc.iter().map(|x| x.good as usize).sum::<usize>();
