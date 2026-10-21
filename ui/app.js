@@ -73,7 +73,14 @@ let picking = false;   // идёт подбор стратегии
 const pick = {};       // результаты подбора по id стратегии
 
 // Длинные сообщения (например, почему не подобралась стратегия) висят дольше.
-const toast = t => { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), Math.max(2800, String(t).length * 60)); };
+const toast = t => { const el = placeToast(); el.textContent = t; el.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), Math.max(2800, String(t).length * 60)); };
+// Открытое окно стратегий вместе с затемнением лежит поверх всей страницы.
+// Пока оно открыто, уведомление показываем внутри окна, иначе его закрывает затемнение.
+function placeToast() {
+  const el = $('#toast'), d = $('#stratDlg'), host = d.open ? d : document.body;
+  if (el.parentElement !== host) host.appendChild(el);
+  return el;
+}
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 const both = a => a.length > 1 ? a.slice(0, -1).join(', ') + ' и ' + a[a.length - 1] : a[0];
 // 1 сайт, 2 сайта, 5 сайтов
@@ -177,6 +184,7 @@ const showSelected = () => { const o = $('#strats .opt.sel'); if (o) o.scrollInt
 $('#stratOpen').onclick = () => { drawStrats(); dlg.showModal(); showSelected(); };
 $('#dlgClose').onclick = () => dlg.close();
 dlg.onclick = e => { if (e.target === dlg) dlg.close(); };
+dlg.onclose = placeToast;
 function drawStrats() {
   const opt = (s, solo) => {
     const r = pick[s.id];
@@ -184,7 +192,7 @@ function drawStrats() {
       : r.state === 'ok' ? `<span class="res ok">${r.ms} мс</span>`
       : r.state === 'part' ? '<span class="res">Частично</span>' : '<span class="res bad">Не работает</span>';
     const sel = s.id === S.strategy;
-    return `<div class="opt${sel ? ' sel' : ''}${r && r.state === 'wait' ? ' now' : ''}" data-id="${esc(s.id)}" role="radio" tabindex="0" aria-checked="${sel}"><span class="radio"></span><div class="t"><b>${esc(s.name)}</b>${solo ? `<span>${esc(s.desc)}</span>` : ''}</div>${res}</div>`;
+    return `<div class="opt${sel ? ' sel' : ''}${r && r.state === 'wait' ? ' now' : ''}" data-id="${esc(s.id)}" role="radio" tabindex="0" aria-checked="${sel}"${picking ? ' aria-disabled="true"' : ''}><span class="radio"></span><div class="t"><b>${esc(s.name)}</b>${solo ? `<span>${esc(s.desc)}</span>` : ''}</div>${res}</div>`;
   };
   // У стратегий одного семейства одинаковое описание: показываем его один раз над группой.
   const groups = [];
