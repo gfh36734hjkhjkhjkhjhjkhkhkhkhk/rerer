@@ -7,7 +7,17 @@ const mock = (() => {
   const st = { engine_on:false, strategy:'general.bat', games:false, ai:false, tg_on:false, autostart:false, tray:true,
     tg:{host:'127.0.0.1',port:1443,secret:'7f3a9c41e0b25d88f6c1a04e93b7d2aa',link:'tg://proxy?server=127.0.0.1&port=1443&secret=dd7f3a9c41e0b25d88f6c1a04e93b7d2aa'},
     strategies:[['general.bat','Основная','Рекомендуемая, начните с неё'],['general (ALT).bat','ALT','Альтернативная разрезка пакетов'],['general (ALT2).bat','ALT2','Альтернативная разрезка пакетов'],['general (FAKE TLS AUTO).bat','FAKE TLS AUTO','Поддельное TLS-приветствие, часто помогает на мобильном интернете'],['general (SIMPLE FAKE).bat','SIMPLE FAKE','Простые фейковые пакеты']].map(([id,name,desc])=>({id,name,desc})),
-    since:0, user_sites:['rutracker.org','nnmclub.to'], builtin_sites:142, auto_update:true, app_version:'0.5.0', zapret_version:'1.10.3', portable:false, versions:['zapret-discord-youtube 1.10.3 (winws из zapret v72.9)','tg-ws-proxy 1.11.1'] };
+    since:0, user_sites:['rutracker.org','nnmclub.to'], builtin_sites:142, auto_update:true, app_version:'0.11.0', zapret_version:'1.10.4', portable:false, versions:['zapret-discord-youtube 1.10.4 (winws из zapret v72.9)','tg-ws-proxy 1.11.2'] };
+  const diag = [
+    { id:'bypass', level:'bad', title:'Установлены другие обходы: GoodbyeDPI', detail:'Они перехватывают тот же трафик, что и Prism, и обход перестаёт работать. Prism может удалить их службы.', fix:true },
+    { id:'vpn', level:'warn', title:'Работает VPN: OpenVPN Interactive Service', detail:'Некоторые VPN мешают обходу. Если что-то не открывается, выключите VPN.', fix:false },
+    { id:'bfe', level:'ok', title:'Служба базовой фильтрации работает', detail:'', fix:false },
+    { id:'files', level:'ok', title:'Файлы обхода на месте', detail:'', fix:false },
+    { id:'software', level:'ok', title:'Конфликтующих программ не найдено', detail:'', fix:false },
+    { id:'adguard', level:'ok', title:'Adguard не мешает', detail:'', fix:false },
+    { id:'proxy', level:'ok', title:'Системный прокси выключен', detail:'', fix:false },
+    { id:'hosts', level:'ok', title:'В файле hosts нет записей для YouTube', detail:'', fix:false },
+  ];
   const wait = ms => new Promise(r => setTimeout(r, ms));
   return async (cmd, a = {}) => {
     await wait(300);
@@ -19,18 +29,25 @@ const mock = (() => {
       case 'set_tg': st.tg_on = a.on; break;
       case 'set_autostart': st.autostart = a.on; break;
       case 'set_tray': st.tray = a.on; break;
-      case 'add_site': st.user_sites.unshift(a.domain); break;
+      case 'add_site': {
+        const list = a.domain.split(/[\s,;]+/).filter(Boolean).map(s => s.toLowerCase().replace(/^https?:\/\//, '').split(/[/?#:]/)[0].replace(/^www\./, ''));
+        const fresh = list.filter(s => !st.user_sites.includes(s));
+        if (!fresh.length) throw `${list[0]} уже в списке`;
+        st.user_sites.unshift(...fresh); break;
+      }
       case 'remove_site': st.user_sites = st.user_sites.filter(s => s !== a.domain); break;
-      case 'check_services': await wait(900); return { discord:{ok:st.engine_on,ms:120,good:2,total:2}, youtube:{ok:st.engine_on,ms:140,good:3,total:3}, telegram:{ok:st.tg_on,ms:1,good:0,total:0}, chatgpt:st.ai };
+      case 'check_services': await wait(900); return { discord:{ok:st.engine_on,ms:120,good:2,total:2,failed:[]}, youtube:{ok:st.engine_on,ms:140,good:2,total:3,failed:['видеосервер']}, telegram:{ok:st.tg_on,ms:1,good:0,total:0,failed:[]}, chatgpt:st.ai };
       case 'auto_pick':
         for (const s of st.strategies) { emit('pick-progress',{id:s.id,state:'wait',ms:0}); await wait(400); emit('pick-progress',{id:s.id,state:s.id.includes('ALT2')?'bad':'ok',ms:100+Math.round(Math.random()*150)}); }
         st.strategy = 'general.bat'; st.engine_on = true; st.since = Date.now(); break;
-      case 'get_log': return '[prism] предпросмотр в браузере';
+      case 'get_log': return '12:00:01 [prism] Prism 0.11.0 запущен\n12:00:03 [prism] запуск стратегии general.bat, игровой режим: false\n12:00:05 [prism] предпросмотр в браузере';
       case 'set_auto_update': st.auto_update = a.on; break;
-      case 'check_updates': return { app:{current:'0.5.0',latest:'0.5.1',available:true}, zapret:{current:'1.10.3',latest:'1.10.3',available:false} };
+      case 'check_updates': return { app:{current:'0.11.0',latest:'0.11.1',available:true}, zapret:{current:'1.10.4',latest:'1.10.4',available:false} };
       case 'update_zapret': throw 'У вас уже последняя версия обходов';
       case 'update_app': return null;
-      case 'open_tg_link': case 'close_window': return null;
+      case 'run_diagnostics': await wait(1200); return JSON.parse(JSON.stringify(diag));
+      case 'fix_problem': await wait(900); Object.assign(diag[0], { level:'ok', title:'Других обходов не найдено', detail:'', fix:false }); return JSON.parse(JSON.stringify(diag));
+      case 'open_tg_link': case 'close_window': case 'open_data_dir': return null;
     }
     return JSON.parse(JSON.stringify(st));
   };
@@ -51,9 +68,12 @@ const invalidate = () => { checkGen++; svc = null; };
 let picking = false;   // идёт подбор стратегии
 const pick = {};       // результаты подбора по id стратегии
 
-const toast = t => { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2800); };
+// Длинные сообщения (например, почему не подобралась стратегия) висят дольше.
+const toast = t => { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), Math.max(2800, String(t).length * 60)); };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 const both = a => a.length > 1 ? a.slice(0, -1).join(', ') + ' и ' + a[a.length - 1] : a[0];
+// 1 сайт, 2 сайта, 5 сайтов
+const plural = (n, f) => f[n % 10 === 1 && n % 100 !== 11 ? 0 : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 1 : 2];
 
 async function call(cmd, args, okText) {
   try {
@@ -196,13 +216,52 @@ $('#addForm').onsubmit = async e => {
   e.preventDefault();
   const v = $('#addInput').value.trim();
   if (!v) return;
-  try { await call('add_site', { domain: v }, `${v} добавлен в список`); $('#addInput').value = ''; } catch {}
+  const before = new Set(S.user_sites);
+  try {
+    await call('add_site', { domain: v });
+    const added = S.user_sites.filter(s => !before.has(s));
+    toast(added.length === 1 ? `${added[0]} добавлен в список` : `Добавлено ${added.length} ${plural(added.length, ['сайт', 'сайта', 'сайтов'])}`);
+    $('#addInput').value = '';
+  } catch {}
 };
 
-// Журнал
-async function loadLog() { try { $('#log').textContent = (await invoke('get_log')) || 'Пока пусто'; } catch {} }
+// Журнал: новые строки внизу, поэтому держим прокрутку у конца, если её не сдвигали
+async function loadLog() {
+  try {
+    const el = $('#log'), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 24;
+    el.textContent = (await invoke('get_log')) || 'Пока пусто';
+    if (atEnd) el.scrollTop = el.scrollHeight;
+  } catch {}
+}
 $('#logRefresh').onclick = loadLog;
 $('#logCopy').onclick = () => { navigator.clipboard.writeText($('#log').textContent); toast('Журнал скопирован'); };
+$('#logFolder').onclick = () => invoke('open_data_dir').catch(e => toast(String(e)));
+
+// Диагностика: что мешает обходу на этом компьютере
+let D = null;
+function drawDiag() {
+  $$('#diag .d').forEach(el => el.remove());
+  if (!D) return;
+  const issues = D.filter(i => i.level === 'bad' || i.level === 'warn').length;
+  $('#diagSub').textContent = issues ? `${plural(issues, ['Нашлась', 'Нашлись', 'Нашлось'])} ${issues} ${plural(issues, ['проблема', 'проблемы', 'проблем'])}. Начните с первой` : 'Проблем не найдено. Если обход всё равно не работает, нажмите «Подобрать» на главной';
+  $('#diag').insertAdjacentHTML('beforeend', D.map(i => `<div class="item d ${esc(i.level)}"><div class="row"><i class="mark" aria-hidden="true"></i><div class="t"><b>${esc(i.title)}</b>${i.detail ? `<span>${esc(i.detail)}</span>` : ''}</div>${i.fix && i.level !== 'ok' ? `<button class="btn${i.level === 'bad' ? ' primary' : ''}" data-fix="${esc(i.id)}">Исправить</button>` : ''}</div></div>`).join(''));
+  $$('[data-fix]').forEach(b => b.onclick = () => fixProblem(b));
+}
+$('#diagRun').onclick = async () => {
+  const b = $('#diagRun');
+  b.disabled = true; b.textContent = 'Проверяю…';
+  try { D = await invoke('run_diagnostics'); drawDiag(); } catch (e) { toast(String(e)); }
+  b.disabled = false; b.textContent = 'Проверить снова';
+};
+async function fixProblem(b) {
+  const id = b.dataset.fix;
+  // Удаление служб других обходов не отменить, поэтому нужно второе нажатие.
+  if (id === 'bypass' && !b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Удалить их службы?'; return; }
+  $$('[data-fix]').forEach(x => x.disabled = true);
+  b.textContent = 'Исправляю…';
+  try { D = await invoke('fix_problem', { id }); toast('Готово'); await refresh(); invalidate(); checkSoon(); } catch (e) { toast(String(e)); }
+  drawDiag();
+}
 
 // Проверка Discord и YouTube
 let checkTimer = null;
@@ -229,7 +288,10 @@ function web(k) {
   const x = svc && svc[k];
   if (!x) return ['wait', 'Проверяю…', 0];
   if (!x.ok) return ['fail', 'Не открывается', 0];
-  if (x.total > 1 && x.good < x.total) return ['part', `${x.ms} мс, ${x.good} из ${x.total}`, x.ms < 150 ? 3 : 2];
+  if (x.total > 1 && x.good < x.total) {
+    const what = (x.failed || []).includes('видеосервер') ? 'видео не грузится' : `${x.good} из ${x.total}`;
+    return ['part', `${x.ms} мс, ${what}`, x.ms < 150 ? 3 : 2];
+  }
   return ['ok', `${x.ms} мс`, x.ms < 150 ? 3 : x.ms < 400 ? 2 : 1];
 }
 const ago = t => { const m = Math.floor((Date.now() - t) / 60000); return m < 1 ? 'только что' : m < 60 ? `${m} мин назад` : `${Math.floor(m / 60)} ч назад`; };
@@ -340,7 +402,7 @@ async function updateApp(btn) {
   if (!U || !U.app.available) return checkUpdates(false);
   const label = btn.id === 'updBar' ? $('#updText') : btn;
   btn.disabled = true; label.textContent = S.portable ? 'Открываю…' : 'Скачиваю…';
-  try { await invoke('update_app'); toast(S.portable ? 'Скачайте новую версию со страницы релиза' : 'Запускаю установщик'); }
+  try { await invoke('update_app'); toast(S.portable ? 'Скачайте новую версию со страницы релиза' : 'Устанавливаю обновление. Prism перезапустится сам'); }
   catch (e) { toast(String(e)); }
   btn.disabled = false; drawUpdates();
 }
@@ -355,6 +417,16 @@ $('#zapUpd').onclick = async e => {
 };
 listen('updates', e => { U = e.payload; drawUpdates(); });
 listen('zapret-updated', e => toast(`Обходы обновлены до версии ${e.payload}`));
+listen('toast', e => toast(String(e.payload)));
 
-listen('state-changed', () => refresh().then(checkSoon));
+// Состояние поменялось без участия окна: переключили в трее, обход упал или перезапустился.
+// Во время подбора и переключения ответ придёт вместе с результатом команды.
+listen('state-changed', async () => {
+  if (busy || picking) return;
+  const was = S && S.engine_on;
+  try { await refresh(); } catch { return; }
+  if (S.engine_on !== was) { invalidate(); render(); }
+  // Прокси Telegram мог запуститься уже после прошлой проверки, поэтому проверяем всегда.
+  checkSoon();
+});
 refresh().then(checkSoon);

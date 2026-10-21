@@ -3,17 +3,23 @@ name: Build Prism
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# Новая сборка pull request отменяет предыдущую, сборки main доводятся до конца.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
-  ZAPRET_VERSION: "1.10.3"
-  ZAPRET_ZIP_SHA256: "244314ae1c24538a0d751601da8e0c925c843371eec4456eb15f14c4fd6b7058"
+  ZAPRET_VERSION: "1.10.4"
+  ZAPRET_ZIP_SHA256: "291af673bd0238506f9548e0e94ca0abf244000f4c9a06960544fb01c5f97b34"
   # winws.exe из официального zapret v72.9 (bol-van)
   WINWS_SHA256: "affb4f69d2ea302a7abccd5325d81826e140ddae014f1e070bc4a6c0dd555188"
-  TG_PROXY_TAG: "v1.11.1"
+  TG_PROXY_TAG: "v1.11.2"
 
 jobs:
   build:
@@ -50,7 +56,8 @@ jobs:
         run: |
           git clone --depth 1 --branch $env:TG_PROXY_TAG https://github.com/Flowseal/tg-ws-proxy tgsrc
           python -m pip install --upgrade pip
-          pip install pyinstaller cryptography h2 "httpx[http2]" certifi pillow
+          # Версии библиотек — как в pyproject.toml tg-ws-proxy, чтобы сборка не менялась сама собой.
+          pip install pyinstaller "cryptography==46.0.5" "httpx[http2]==0.28.1" certifi "pillow==12.1.1"
           Copy-Item scripts/tg_launcher.py tgsrc/prism_tg.py
           Push-Location tgsrc
           pyinstaller --onefile --name tg-ws-proxy --collect-submodules proxy --noconfirm prism_tg.py
@@ -75,6 +82,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      # Тесты проверяют и стратегии Flowseal, скачанные выше: каждая должна разбираться.
+      - name: Тесты
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
       - name: Собрать Prism
         shell: pwsh
@@ -101,7 +113,25 @@ jobs:
           name: Prism
           path: dist/*
 
+      # Релиз выкладывается только из main и только для новой версии: повторная сборка
+      # той же версии не подменяет файлы релиза, который уже скачивают пользователи.
+      - name: Проверить, есть ли уже такой релиз
+        id: release
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.pack.outputs.version }}"
+          if gh release view "$tag" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Релиз $tag уже есть, публикация пропущена. Чтобы выпустить новый, поднимите версию."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Выложить релиз
+        if: github.event_name != 'pull_request' && steps.release.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.pack.outputs.version }}

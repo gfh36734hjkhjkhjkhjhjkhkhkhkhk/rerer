@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod diag;
 mod engine;
 mod hosts;
 mod probe;
@@ -8,14 +9,15 @@ mod tgproxy;
 mod updates;
 mod util;
 
-use std::path::PathBuf;
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent, Wry};
 
 use engine::{Engine, Strategy, ZapretPaths};
 use settings::Settings;
@@ -23,14 +25,22 @@ use tgproxy::Proxy;
 use util::{run_quiet, Log};
 
 const ZAPRET_VERSION: &str = "обходы: Flowseal zapret-discord-youtube";
-const TG_VERSION: &str = "tg-ws-proxy 1.11.1";
+const TG_VERSION: &str = "tg-ws-proxy 1.11.2";
 const TASK_NAME: &str = "Prism";
+
+/// Сторож перезапускает упавший winws.exe не чаще MAX_RESTARTS раз за RESTART_WINDOW.
+const MAX_RESTARTS: usize = 3;
+const RESTART_WINDOW: Duration = Duration::from_secs(600);
+/// Если winws.exe проработал меньше, перезапуск не поможет: стратегия не подходит.
+const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(15);
 
 struct Inner {
     settings: Settings,
     engine: Engine,
     proxy: Proxy,
-    busy: bool,
+    /// Длинная операция, которая сама перезапускает движок: подбор стратегии или
+    /// обновление обходов. Пока она идёт, сторож и переключатели движок не трогают.
+    busy: Option<&'static str>,
 }
 
 struct Prism {
@@ -40,11 +50,38 @@ struct Prism {
     tg_exe: PathBuf,
     settings_file: PathBuf,
     hosts_cache: PathBuf,
+    data_dir: PathBuf,
+}
+
+/// Снимает флаг busy, когда операция закончилась, в том числе с ошибкой.
+struct Busy<'a>(&'a Prism);
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.inner.lock().unwrap().busy = None;
+    }
 }
 
 impl Prism {
     fn save(&self, i: &Inner) {
         i.settings.save(&self.settings_file);
+    }
+
+    /// Начать длинную операцию, если не идёт другая.
+    fn begin(&self, what: &'static str) -> R<Busy<'_>> {
+        let mut i = self.inner.lock().unwrap();
+        if let Some(cur) = i.busy {
+            return Err(format!("Подождите, сейчас идёт {cur}"));
+        }
+        i.busy = Some(what);
+        Ok(Busy(self))
+    }
+
+    fn ensure_idle(&self) -> R<()> {
+        match self.inner.lock().unwrap().busy {
+            Some(cur) => Err(format!("Подождите, сейчас идёт {cur}")),
+            None => Ok(()),
+        }
     }
 }
 
@@ -145,12 +182,41 @@ async fn start_engine(p: &Prism) -> R<()> {
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let mut i = p.inner.lock().unwrap();
     if !i.engine.alive() {
+        if let Some(code) = i.engine.exited() {
+            p.log.push(format!("[prism] winws.exe завершился с кодом {code:#x}"));
+        }
         i.engine.stop();
         return Err("Обход не запустился. Откройте журнал в настройках, там написана причина.".into());
     }
     Ok(())
 }
 
+/// Остановить движок и выгрузить драйвер WinDivert.
+fn stop_engine(p: &Prism) {
+    p.inner.lock().unwrap().engine.stop();
+    engine::kill_stray();
+    engine::unload_driver();
+}
+
+/// Включить или выключить обход и запомнить выбор.
+async fn switch_engine(p: &Prism, on: bool) -> R<()> {
+    p.ensure_idle()?;
+    if on {
+        start_engine(p).await?;
+    } else {
+        stop_engine(p);
+    }
+    let mut i = p.inner.lock().unwrap();
+    i.settings.engine_on = on;
+    p.save(&i);
+    Ok(())
+}
+
+fn start_proxy(p: &Prism) -> R<()> {
+    let mut i = p.inner.lock().unwrap();
+    let (port, secret) = (i.settings.tg_port, i.settings.tg_secret.clone());
+    i.proxy.start(&p.tg_exe, port, &secret, &p.log)
+}
 
 fn zapret_version(z: &ZapretPaths) -> String {
     std::fs::read_to_string(z.root.join("version.txt"))
@@ -193,13 +259,15 @@ async fn check_info(p: &Prism) -> R<updates::Info> {
     Ok(info)
 }
 
-/// Скачать и установить новую версию обходов Flowseal. Возвращает true, если обновились.
-async fn do_update_zapret(p: &Prism) -> R<bool> {
+/// Скачать и установить обходы Flowseal. Возвращает true, если файлы заменены.
+/// force — переустановить и ту же версию, например если антивирус удалил файлы.
+async fn do_update_zapret(p: &Prism, force: bool) -> R<bool> {
     let rel = updates::latest(updates::ZAPRET_REPO).await?;
     let current = zapret_version(&p.zapret);
-    if !updates::newer(&rel.tag_name, &current) {
+    if !force && !updates::newer(&rel.tag_name, &current) {
         return Ok(false);
     }
+    let _busy = p.begin("обновление обходов")?;
     let asset = updates::zapret_asset(&rel).ok_or("В релизе Flowseal нет архива zapret")?.clone();
     p.log.push(format!("[prism] скачиваю обходы Flowseal {}", rel.tag_name));
     let bytes = updates::download_verified(&asset).await?;
@@ -207,6 +275,10 @@ async fn do_update_zapret(p: &Prism) -> R<bool> {
     let fresh = root.with_file_name("zapret-new");
     let old = root.with_file_name("zapret-old");
     updates::unpack_zapret(&bytes, &fresh, &rel.tag_name)?;
+    if let Err(e) = check_fresh(p, &fresh, &rel.tag_name) {
+        let _ = std::fs::remove_dir_all(&fresh);
+        return Err(e);
+    }
     updates::carry_user_lists(&root, &fresh);
     let running = {
         let mut i = p.inner.lock().unwrap();
@@ -217,13 +289,16 @@ async fn do_update_zapret(p: &Prism) -> R<bool> {
     engine::kill_stray();
     engine::unload_driver();
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let _ = std::fs::remove_dir_all(&old);
-    std::fs::rename(&root, &old).map_err(|e| format!("Не удалось заменить файлы: {e}"))?;
-    if let Err(e) = std::fs::rename(&fresh, &root) {
-        let _ = std::fs::rename(&old, &root);
-        return Err(format!("Не удалось заменить файлы: {e}"));
+    if let Err(e) = swap_dirs(&root, &fresh, &old) {
+        let _ = std::fs::remove_dir_all(&fresh);
+        // Файлы остались прежними: возвращаем обход, который работал до обновления.
+        if running {
+            if let Err(e) = start_engine(p).await {
+                p.log.push(format!("[prism] {e}"));
+            }
+        }
+        return Err(e);
     }
-    let _ = std::fs::remove_dir_all(&old);
     {
         let mut i = p.inner.lock().unwrap();
         if !p.zapret.strategies().join(&i.settings.strategy).exists() {
@@ -238,12 +313,48 @@ async fn do_update_zapret(p: &Prism) -> R<bool> {
     Ok(true)
 }
 
-async fn refresh_ai_hosts(p: &Prism) -> R<()> {
-    let list = hosts::download().await?;
-    let _ = std::fs::write(&p.hosts_cache, &list);
-    hosts::enable(&list)?;
-    p.log.push("[prism] список адресов для нейросетей обновлён");
+/// Новая версия Flowseal может сменить формат стратегий. Проверяем её до замены
+/// файлов, чтобы автообновление не оставило всех без обхода.
+fn check_fresh(p: &Prism, fresh: &Path, tag: &str) -> R<()> {
+    let paths = ZapretPaths { root: fresh.to_path_buf() };
+    let current = p.inner.lock().unwrap().settings.strategy.clone();
+    let broken = engine::broken_strategies(&paths);
+    for (id, e) in &broken {
+        p.log.push(format!("[prism] Flowseal {tag}, {id}: {e}"));
+    }
+    let essential = broken.iter().any(|(id, _)| *id == current || id == "general.bat");
+    if essential || engine::list_strategies(&paths).is_empty() {
+        return Err(format!("Обходы Flowseal {tag} пока не поддерживаются этой версией Prism, обновление отложено"));
+    }
     Ok(())
+}
+
+/// Заменить папку root на fresh. Если не вышло, root остаётся прежней.
+fn swap_dirs(root: &Path, fresh: &Path, old: &Path) -> R<()> {
+    let _ = std::fs::remove_dir_all(old);
+    let had_root = root.exists();
+    if had_root {
+        std::fs::rename(root, old).map_err(|e| format!("Не удалось заменить файлы: {e}"))?;
+    }
+    if let Err(e) = std::fs::rename(fresh, root) {
+        if had_root {
+            let _ = std::fs::rename(old, root);
+        }
+        return Err(format!("Не удалось заменить файлы: {e}"));
+    }
+    let _ = std::fs::remove_dir_all(old);
+    Ok(())
+}
+
+/// Адреса для нейросетей: свежие из сети или сохранённые в прошлый раз.
+async fn ai_list(p: &Prism) -> R<String> {
+    match hosts::download().await {
+        Ok(list) => {
+            let _ = std::fs::write(&p.hosts_cache, &list);
+            Ok(list)
+        }
+        Err(e) => std::fs::read_to_string(&p.hosts_cache).map_err(|_| e),
+    }
 }
 
 #[tauri::command]
@@ -253,7 +364,7 @@ async fn check_updates(p: State<'_, Prism>) -> R<updates::Info> {
 
 #[tauri::command]
 async fn update_zapret(p: State<'_, Prism>) -> R<AppState> {
-    if !do_update_zapret(&p).await? {
+    if !do_update_zapret(&p, false).await? {
         return Err("У вас уже последняя версия обходов".into());
     }
     Ok(snapshot(&p))
@@ -274,7 +385,22 @@ async fn update_app(app: AppHandle, p: State<'_, Prism>) -> R<()> {
     let bytes = updates::download_verified(&asset).await?;
     let path = std::env::temp_dir().join(&asset.name);
     std::fs::write(&path, bytes).map_err(|e| format!("Не удалось сохранить установщик: {e}"))?;
-    std::process::Command::new(&path).spawn().map_err(|e| format!("Не удалось запустить установщик: {e}"))?;
+    // tg-ws-proxy.exe лежит в папке программы: установщик будет его заменять.
+    let tg_was_on = {
+        let mut i = p.inner.lock().unwrap();
+        let on = i.proxy.alive();
+        i.proxy.stop();
+        on
+    };
+    // Так обновляет сам Tauri: /P — только полоса прогресса, /UPDATE — поверх
+    // установленной версии, /R — снова запустить Prism, и обход включится сам.
+    if let Err(e) = std::process::Command::new(&path).args(["/P", "/UPDATE", "/R"]).spawn() {
+        if tg_was_on {
+            let _ = start_proxy(&p);
+        }
+        return Err(format!("Не удалось запустить установщик: {e}"));
+    }
+    p.log.push(format!("[prism] устанавливаю Prism {}, программа перезапустится", rel.tag_name));
     shutdown(&app);
     app.exit(0);
     Ok(())
@@ -297,23 +423,13 @@ async fn get_state(p: State<'_, Prism>) -> R<AppState> {
 
 #[tauri::command]
 async fn set_engine(p: State<'_, Prism>, on: bool) -> R<AppState> {
-    if on {
-        start_engine(&p).await?;
-    } else {
-        p.inner.lock().unwrap().engine.stop();
-        engine::kill_stray();
-        engine::unload_driver();
-    }
-    {
-        let mut i = p.inner.lock().unwrap();
-        i.settings.engine_on = on;
-        p.save(&i);
-    }
+    switch_engine(&p, on).await?;
     Ok(snapshot(&p))
 }
 
 #[tauri::command]
 async fn set_strategy(p: State<'_, Prism>, id: String) -> R<AppState> {
+    p.ensure_idle()?;
     let running = {
         let mut i = p.inner.lock().unwrap();
         i.settings.strategy = id;
@@ -328,6 +444,7 @@ async fn set_strategy(p: State<'_, Prism>, id: String) -> R<AppState> {
 
 #[tauri::command]
 async fn set_games(p: State<'_, Prism>, on: bool) -> R<AppState> {
+    p.ensure_idle()?;
     let running = {
         let mut i = p.inner.lock().unwrap();
         i.settings.games = on;
@@ -343,14 +460,7 @@ async fn set_games(p: State<'_, Prism>, on: bool) -> R<AppState> {
 #[tauri::command]
 async fn set_ai(p: State<'_, Prism>, on: bool) -> R<AppState> {
     if on {
-        let list = match hosts::download().await {
-            Ok(l) => {
-                let _ = std::fs::write(&p.hosts_cache, &l);
-                l
-            }
-            Err(e) => std::fs::read_to_string(&p.hosts_cache).map_err(|_| e)?,
-        };
-        hosts::enable(&list)?;
+        hosts::enable(&ai_list(&p).await?)?;
     } else {
         hosts::disable()?;
     }
@@ -402,6 +512,7 @@ async fn open_tg_link(p: State<'_, Prism>) -> R<()> {
     Ok(())
 }
 
+/// Адрес сайта для списка zapret: без протокола, пути и www., русские домены — в punycode.
 fn normalize_domain(raw: &str) -> Option<String> {
     let mut d = raw.trim().to_lowercase();
     for pre in ["https://", "http://"] {
@@ -409,22 +520,48 @@ fn normalize_domain(raw: &str) -> Option<String> {
             d = rest.to_string();
         }
     }
-    let d = d.split(['/', '?', '#', ':']).next().unwrap_or("").trim_start_matches("www.").to_string();
-    let valid = d.contains('.')
-        && !d.starts_with('.')
-        && !d.ends_with('.')
-        && d.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
-    valid.then_some(d)
+    let d = d.split(['/', '?', '#', ':']).next().unwrap_or("").trim_start_matches("www.");
+    if d.is_empty() {
+        return None;
+    }
+    // zapret сравнивает домены в том виде, в каком их видно в трафике: сайт.рф → xn--80aswg.xn--p1ai.
+    let host = reqwest::Url::parse(&format!("http://{d}/")).ok()?.host_str()?.to_string();
+    let valid = host.contains('.')
+        && !host.starts_with('.')
+        && !host.ends_with('.')
+        && !host.contains("..")
+        && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && host.parse::<std::net::Ipv4Addr>().is_err();
+    valid.then_some(host)
+}
+
+/// Разобрать ввод: можно вставить сразу несколько адресов через пробел, запятую или с новой строки.
+fn parse_sites(raw: &str) -> R<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for part in raw.split(|c: char| c.is_whitespace() || c == ',' || c == ';').filter(|s| !s.is_empty()) {
+        let d = normalize_domain(part).ok_or_else(|| format!("«{part}» не похоже на адрес сайта. Пример: site.ru"))?;
+        if !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    if out.is_empty() {
+        return Err("Введите адрес сайта, например site.ru".into());
+    }
+    Ok(out)
 }
 
 #[tauri::command]
 async fn add_site(p: State<'_, Prism>, domain: String) -> R<AppState> {
-    let d = normalize_domain(&domain).ok_or("Введите адрес сайта, например site.ru")?;
-    let mut sites = read_user_sites(&p.zapret);
-    if sites.contains(&d) {
-        return Err(format!("{d} уже в списке"));
+    let new = parse_sites(&domain)?;
+    let current = read_user_sites(&p.zapret);
+    let mut sites: Vec<String> = new.iter().filter(|d| !current.contains(d)).cloned().collect();
+    if sites.is_empty() {
+        return Err(match new.as_slice() {
+            [one] => format!("{one} уже в списке"),
+            _ => "Эти сайты уже в списке".into(),
+        });
     }
-    sites.insert(0, d);
+    sites.extend(current);
     write_user_sites(&p.zapret, &sites)?;
     Ok(snapshot(&p))
 }
@@ -452,7 +589,7 @@ async fn check_services(p: State<'_, Prism>) -> R<Status> {
     };
     let s = probe::services(6).await;
     let telegram = probe::tcp(port).await;
-    let chatgpt = ai && std::fs::read_to_string(hosts::hosts_path()).map(|t| t.contains("Prism: нейросети")).unwrap_or(false);
+    let chatgpt = ai && hosts::is_enabled();
     Ok(Status { discord: s.discord, youtube: s.youtube, telegram, chatgpt })
 }
 
@@ -465,15 +602,12 @@ struct Progress {
 
 #[tauri::command]
 async fn auto_pick(app: AppHandle, p: State<'_, Prism>) -> R<AppState> {
-    {
-        let mut i = p.inner.lock().unwrap();
-        if i.busy {
-            return Err("Подбор уже идёт".into());
-        }
-        i.busy = true;
-    }
+    let busy = p.begin("подбор стратегии")?;
     let list = engine::list_strategies(&p.zapret);
-    let previous = p.inner.lock().unwrap().settings.strategy.clone();
+    let (previous, was_on) = {
+        let mut i = p.inner.lock().unwrap();
+        (i.settings.strategy.clone(), i.engine.alive())
+    };
     let mut best: Option<(usize, u64, String)> = None;
     for s in &list {
         let _ = app.emit("pick-progress", Progress { id: s.id.clone(), state: "wait", ms: 0 });
@@ -493,13 +627,7 @@ async fn auto_pick(app: AppHandle, p: State<'_, Prism>) -> R<AppState> {
             let ok = svc.iter().filter(|x| x.ok).count();
             let adr = svc.iter().map(|x| x.good as usize).sum::<usize>();
             let ms = if ok > 0 { (r.discord.ms + r.youtube.ms) / ok as u64 } else { 0 };
-            // Что именно не открылось: сайт, видеосервер или api.
-            let failed = if r.youtube.total > r.youtube.good {
-                probe::youtube_failed(&probe::client(4)).await
-            } else {
-                Vec::new()
-            };
-            (ok * 100 + adr, ms, failed.join(", "))
+            (ok * 100 + adr, ms, r.youtube.failed.join(", "))
         } else {
             (0, 0, String::new())
         };
@@ -518,17 +646,74 @@ async fn auto_pick(app: AppHandle, p: State<'_, Prism>) -> R<AppState> {
             best = Some((score, ms, s.id.clone()));
         }
     }
-    let chosen = best.map(|b| b.2).unwrap_or(previous);
+    let found = best.is_some();
     {
         let mut i = p.inner.lock().unwrap();
-        i.settings.strategy = chosen;
-        i.settings.engine_on = true;
-        i.busy = false;
+        i.settings.strategy = best.map(|b| b.2).unwrap_or(previous);
+        if found {
+            i.settings.engine_on = true;
+        }
         p.save(&i);
     }
-    let result = start_engine(&p).await;
-    result?;
+    // Ничего не подошло — возвращаем всё как было до подбора.
+    if found || was_on {
+        start_engine(&p).await?;
+    } else {
+        stop_engine(&p);
+    }
+    drop(busy);
+    if !found {
+        p.log.push("[prism] подбор: ни одна стратегия не открыла Discord и YouTube");
+        return Err("Ни одна стратегия не открыла Discord и YouTube. Запустите диагностику в настройках: возможно, обходу мешает другая программа.".into());
+    }
     Ok(snapshot(&p))
+}
+
+async fn diagnose(p: &Prism) -> R<Vec<diag::Item>> {
+    let paths = p.zapret.clone();
+    let items = tauri::async_runtime::spawn_blocking(move || diag::run(&paths)).await.map_err(|e| e.to_string())?;
+    let issues: Vec<&str> = items.iter().filter(|i| i.level == "bad" || i.level == "warn").map(|i| i.title.as_str()).collect();
+    p.log.push(if issues.is_empty() {
+        "[prism] диагностика: проблем не найдено".to_string()
+    } else {
+        format!("[prism] диагностика: {}", issues.join("; "))
+    });
+    Ok(items)
+}
+
+#[tauri::command]
+async fn run_diagnostics(p: State<'_, Prism>) -> R<Vec<diag::Item>> {
+    diagnose(&p).await
+}
+
+#[tauri::command]
+async fn fix_problem(p: State<'_, Prism>, id: String) -> R<Vec<diag::Item>> {
+    if id == "files" {
+        do_update_zapret(&p, true).await?;
+    } else {
+        let busy = p.begin("исправление")?;
+        // Другие обходы делят с Prism драйвер WinDivert: на время удаления их служб движок останавливаем.
+        let running = id == "bypass" && p.inner.lock().unwrap().engine.alive();
+        if running {
+            stop_engine(&p);
+        }
+        let what = id.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || diag::fix(&what)).await.map_err(|e| e.to_string())?;
+        if running {
+            if let Err(e) = start_engine(&p).await {
+                p.log.push(format!("[prism] {e}"));
+            }
+        }
+        drop(busy);
+        p.log.push(format!("[prism] исправление: {}", result.as_ref().unwrap_or_else(|e| e)));
+        result?;
+    }
+    diagnose(&p).await
+}
+
+#[tauri::command]
+async fn open_data_dir(p: State<'_, Prism>) -> R<()> {
+    std::process::Command::new("explorer").arg(&p.data_dir).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 fn xml_escape(s: &str) -> String {
@@ -683,11 +868,83 @@ fn shutdown(app: &AppHandle) {
     engine::unload_driver();
 }
 
+/// Переключить обход из меню трея, не открывая окно.
+fn toggle_from_tray(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let p = app.state::<Prism>();
+        let on = !p.inner.lock().unwrap().engine.alive();
+        if let Err(e) = switch_engine(&p, on).await {
+            p.log.push(format!("[prism] {e}"));
+            let _ = app.emit("toast", e);
+        }
+        let _ = app.emit("state-changed", ());
+    });
+}
+
+/// Код выхода и время работы winws.exe, если он завершился сам, а не по команде Prism.
+fn crashed(p: &Prism) -> Option<(i32, Duration)> {
+    let mut i = p.inner.lock().unwrap();
+    // Подбор и обновление сами перезапускают движок, а первые секунды после запуска проверяет start_engine.
+    if i.busy.is_some() || !i.settings.engine_on || i.engine.uptime() < Duration::from_secs(3) {
+        return None;
+    }
+    let code = i.engine.exited()?;
+    let up = i.engine.uptime();
+    i.engine.stop();
+    Some((code, up))
+}
+
+/// Сторож: подсказка и меню трея, обновление окна и перезапуск упавшего winws.exe
+/// (например, после сна компьютера или если его закрыл антивирус).
+fn spawn_supervisor(app: AppHandle, toggle: MenuItem<Wry>) {
+    tauri::async_runtime::spawn(async move {
+        let mut last: Option<bool> = None;
+        let mut restarts: VecDeque<Instant> = VecDeque::new();
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let p = app.state::<Prism>();
+            if let Some((code, up)) = crashed(&p) {
+                restarts.retain(|t| t.elapsed() < RESTART_WINDOW);
+                if up >= MIN_HEALTHY_UPTIME && restarts.len() < MAX_RESTARTS {
+                    restarts.push_back(Instant::now());
+                    p.log.push(format!("[prism] обход неожиданно остановился (код {code:#x}), перезапускаю"));
+                    if let Err(e) = start_engine(&p).await {
+                        p.log.push(format!("[prism] {e}"));
+                        let _ = app.emit("toast", "Обход остановился и не перезапустился. Подробности в журнале");
+                    }
+                } else {
+                    p.log.push(format!("[prism] обход остановился (код {code:#x}) и больше не перезапускается"));
+                    let _ = app.emit("toast", "Обход остановился. Попробуйте другую стратегию или диагностику в настройках");
+                }
+            }
+            let (on, busy) = {
+                let mut i = p.inner.lock().unwrap();
+                (i.engine.alive(), i.busy.is_some())
+            };
+            // Во время подбора движок то включается, то выключается: окно об этом не дёргаем.
+            if busy || last == Some(on) {
+                continue;
+            }
+            if let Some(t) = app.tray_by_id("main") {
+                let _ = t.set_tooltip(Some(if on { "Prism: обход включён" } else { "Prism: обход выключен" }));
+            }
+            let _ = toggle.set_text(if on { "Выключить обход" } else { "Включить обход" });
+            if last.is_some() {
+                let _ = app.emit("state-changed", ());
+            }
+            last = Some(on);
+        }
+    });
+}
+
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let log = Log::default();
     let res = app.path().resource_dir()?.join("resources");
     let data = app.path().app_local_data_dir()?;
     std::fs::create_dir_all(&data)?;
+    log.attach_file(&data.join("prism.log"));
+    log.push(format!("[prism] Prism {} запущен", env!("CARGO_PKG_VERSION")));
     let zapret = ZapretPaths { root: data.join("zapret") };
     if let Err(e) = engine::install(&res.join("zapret"), &zapret.root, &log) {
         log.push(format!("[prism] {e}"));
@@ -709,24 +966,28 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let keep_task = settings.autostart;
 
     app.manage(Prism {
-        inner: Mutex::new(Inner { settings, engine: Engine::default(), proxy: Proxy::default(), busy: false }),
+        inner: Mutex::new(Inner { settings, engine: Engine::default(), proxy: Proxy::default(), busy: None }),
         log,
         zapret,
         tg_exe: res.join("tgproxy").join("tg-ws-proxy.exe"),
         settings_file,
         hosts_cache: data.join("ai-hosts.txt"),
+        data_dir: data,
     });
 
-    // Трей
+    // Трей: обход включается и выключается прямо из меню, без окна.
+    let toggle = MenuItem::with_id(app, "toggle", "Включить обход", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "Открыть Prism", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&toggle, &separator, &show, &quit])?;
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().cloned().ok_or("no icon")?)
         .tooltip("Prism")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, e| match e.id.as_ref() {
+            "toggle" => toggle_from_tray(app),
             "show" => show_main(app),
             "quit" => {
                 shutdown(app);
@@ -745,23 +1006,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         show_main(app.handle());
     }
 
-    // Подсказка у значка в трее: видно, включён ли обход, даже когда окно скрыто.
-    let tip = app.handle().clone();
-    tauri::async_runtime::spawn(async move {
-        let mut last: Option<bool> = None;
-        loop {
-            let on = tip.state::<Prism>().inner.lock().unwrap().engine.alive();
-            if last != Some(on) {
-                if let Some(t) = tip.tray_by_id("main") {
-                    let text = if on { "Prism: обход включён" } else { "Prism: обход выключен" };
-                    if t.set_tooltip(Some(text)).is_ok() {
-                        last = Some(on);
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    });
+    spawn_supervisor(app.handle().clone(), toggle);
 
     // Вернуть то, что было включено в прошлый раз.
     let handle = app.handle().clone();
@@ -773,9 +1018,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if restore.1 {
-            let mut i = p.inner.lock().unwrap();
-            let (port, secret) = (i.settings.tg_port, i.settings.tg_secret.clone());
-            if let Err(e) = i.proxy.start(&p.tg_exe, port, &secret, &p.log) {
+            if let Err(e) = start_proxy(&p) {
                 p.log.push(format!("[prism] {e}"));
             }
         }
@@ -796,7 +1039,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             (i.settings.auto_update, i.settings.ai)
         };
         if auto {
-            match do_update_zapret(&p).await {
+            match do_update_zapret(&p, false).await {
                 Ok(true) => {
                     let _ = handle.emit("zapret-updated", zapret_version(&p.zapret));
                     let _ = handle.emit("state-changed", ());
@@ -804,10 +1047,13 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 Ok(false) => {}
                 Err(e) => p.log.push(format!("[prism] автообновление обходов: {e}")),
             }
-            if ai {
-                if let Err(e) = refresh_ai_hosts(&p).await {
-                    p.log.push(format!("[prism] {e}"));
-                }
+        }
+        // Адреса нейросетей обновляем, а если блок пропал из hosts (антивирус,
+        // переустановка Windows), возвращаем его, раз режим включён.
+        if ai && (auto || !hosts::is_enabled()) {
+            match ai_list(&p).await.and_then(|list| hosts::enable(&list)) {
+                Ok(()) => p.log.push("[prism] адреса для нейросетей обновлены"),
+                Err(e) => p.log.push(format!("[prism] нейросети: {e}")),
             }
         }
         if let Ok(info) = check_info(&p).await {
@@ -833,7 +1079,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_state, set_engine, set_strategy, set_games, set_ai, set_tg, open_tg_link,
             add_site, remove_site, check_services, auto_pick, set_autostart, set_tray, get_log, close_window,
-            check_updates, update_zapret, update_app, set_auto_update
+            check_updates, update_zapret, update_app, set_auto_update,
+            run_diagnostics, fix_problem, open_data_dir
         ])
         .build(tauri::generate_context!())
         .expect("ошибка запуска Prism");
@@ -843,4 +1090,48 @@ fn main() {
             shutdown(app);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_domains() {
+        assert_eq!(normalize_domain("https://www.RuTracker.org/forum/index.php").as_deref(), Some("rutracker.org"));
+        assert_eq!(normalize_domain("nnmclub.to:443").as_deref(), Some("nnmclub.to"));
+        assert_eq!(normalize_domain("http://сайт.рф/путь").as_deref(), Some("xn--80aswg.xn--p1ai"));
+        assert_eq!(normalize_domain("1.2.3.4"), None);
+        assert_eq!(normalize_domain("localhost"), None);
+        assert_eq!(normalize_domain("a..b.com"), None);
+        assert_eq!(normalize_domain("bad_name!.com"), None);
+        assert_eq!(normalize_domain("https://"), None);
+    }
+
+    #[test]
+    fn parses_several_sites() {
+        assert_eq!(
+            parse_sites("rutracker.org, nnmclub.to\nhttps://rutracker.org/ x.com").unwrap(),
+            vec!["rutracker.org", "nnmclub.to", "x.com"]
+        );
+        assert_eq!(parse_sites("  ").unwrap_err(), "Введите адрес сайта, например site.ru");
+        assert!(parse_sites("ok.ru нет").unwrap_err().contains("«нет»"));
+    }
+
+    #[test]
+    fn swaps_dirs_or_keeps_old() {
+        let base = std::env::temp_dir().join(format!("prism-swap-test-{}", std::process::id()));
+        let (root, fresh, old) = (base.join("zapret"), base.join("zapret-new"), base.join("zapret-old"));
+        let _ = std::fs::create_dir_all(&root);
+        let _ = std::fs::create_dir_all(&fresh);
+        std::fs::write(root.join("version.txt"), "old").unwrap();
+        std::fs::write(fresh.join("version.txt"), "new").unwrap();
+        swap_dirs(&root, &fresh, &old).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("version.txt")).unwrap(), "new");
+        assert!(!old.exists() && !fresh.exists());
+        // Новой папки нет — старая остаётся на месте.
+        assert!(swap_dirs(&root, &fresh, &old).is_err());
+        assert_eq!(std::fs::read_to_string(root.join("version.txt")).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
