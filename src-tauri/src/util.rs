@@ -88,6 +88,8 @@ impl Log {
     pub fn attach_file(&self, path: &Path) {
         let mut st = self.0.lock().unwrap();
         st.file = open_log(path);
+        // Учитываем записанное в прошлые запуски, иначе файл перерастёт LOG_FILE_LIMIT.
+        st.written = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         st.path = Some(path.to_path_buf());
         let day = chrono::Local::now().format("%Y-%m-%d").to_string();
         let early: Vec<String> = st.lines.iter().map(|l| format!("{day} {l}")).collect();
@@ -147,6 +149,20 @@ mod tests {
         assert_eq!(first.as_bytes()[2], b':');
         assert!(first.ends_with("[prism] до открытия файла"));
         assert_eq!(body.lines().next().unwrap().as_bytes()[4], b'-');
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotates_log_left_from_last_run() {
+        let dir = std::env::temp_dir().join(format!("prism-log-rotate-test-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("prism.log");
+        fs::write(&path, vec![b'x'; LOG_FILE_LIMIT as usize - 10]).unwrap();
+        let log = Log::default();
+        log.attach_file(&path);
+        log.push("[prism] после этой строки журнал переезжает в prism.old.log");
+        assert!(dir.join("prism.old.log").exists());
+        assert!(fs::metadata(&path).unwrap().len() < 1024);
         let _ = fs::remove_dir_all(&dir);
     }
 }

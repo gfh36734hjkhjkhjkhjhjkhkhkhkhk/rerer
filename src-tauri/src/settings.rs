@@ -51,9 +51,12 @@ impl Settings {
         }
         let Ok(text) = serde_json::to_string_pretty(self) else { return };
         let tmp = path.with_extension("json.tmp");
-        if fs::write(&tmp, text).is_ok() && fs::rename(&tmp, path).is_err() {
-            let _ = fs::remove_file(&tmp);
+        if fs::write(&tmp, &text).is_ok() && fs::rename(&tmp, path).is_ok() {
+            return;
         }
+        // Заменить файл не даст программа, которая держит его открытым: тогда пишем напрямую.
+        let _ = fs::remove_file(&tmp);
+        let _ = fs::write(path, text);
     }
 }
 
