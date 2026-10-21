@@ -425,6 +425,8 @@ listen('state-changed', async () => {
   if (busy || picking) return;
   const was = S && S.engine_on;
   try { await refresh(); } catch { return; }
-  if (S.engine_on !== was) { invalidate(); render(); checkSoon(); }
+  if (S.engine_on !== was) { invalidate(); render(); }
+  // Прокси Telegram мог запуститься уже после прошлой проверки, поэтому проверяем всегда.
+  checkSoon();
 });
 refresh().then(checkSoon);

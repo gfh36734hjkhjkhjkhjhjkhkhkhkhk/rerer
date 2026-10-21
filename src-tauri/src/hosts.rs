@@ -130,11 +130,10 @@ fn youtube_lines(text: &[u8]) -> Vec<String> {
         .zip(&ours)
         .filter(|(_, o)| !**o)
         .map(|(l, _)| String::from_utf8_lossy(l).trim().to_string())
-        .filter(|l| !l.starts_with('#'))
         .filter(|l| {
-            let l = l.to_lowercase();
-            l.split_whitespace().skip(1).any(|h| {
-                let h = h.split('#').next().unwrap_or("");
+            // Всё после # — комментарий: адреса в нём не действуют.
+            let entry = l.split('#').next().unwrap_or("").to_lowercase();
+            entry.split_whitespace().skip(1).any(|h| {
                 ["youtube.com", "youtu.be", "googlevideo.com"].iter().any(|d| h == *d || h.ends_with(&format!(".{d}")))
             })
         })
@@ -267,8 +266,8 @@ mod tests {
     #[test]
     fn finds_youtube_entries() {
         let t = format!(
-            "# 1.2.3.4 youtube.com\r\n127.0.0.1 localhost\r\n1.2.3.4 www.youtube.com # old\r\n5.6.7.8 notyoutube.com\r\n{START}\r\n9.9.9.9 youtube.com\r\n{END}\r\n"
+            "# 1.2.3.4 youtube.com\r\n127.0.0.1 localhost\r\n10.0.0.1 nas.local # не youtube.com\r\n1.2.3.4 www.youtube.com#old\r\n5.6.7.8 notyoutube.com\r\n{START}\r\n9.9.9.9 youtube.com\r\n{END}\r\n"
         );
-        assert_eq!(youtube_lines(t.as_bytes()), vec!["1.2.3.4 www.youtube.com # old".to_string()]);
+        assert_eq!(youtube_lines(t.as_bytes()), vec!["1.2.3.4 www.youtube.com#old".to_string()]);
     }
 }
