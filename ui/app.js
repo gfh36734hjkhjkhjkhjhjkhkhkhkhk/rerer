@@ -6,8 +6,12 @@ const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAl
 const mock = (() => {
   const st = { engine_on:false, strategy:'general.bat', games:false, ai:false, tg_on:false, autostart:false, tray:true,
     tg:{host:'127.0.0.1',port:1443,secret:'7f3a9c41e0b25d88f6c1a04e93b7d2aa',link:'tg://proxy?server=127.0.0.1&port=1443&secret=dd7f3a9c41e0b25d88f6c1a04e93b7d2aa'},
-    strategies:[['general.bat','Основная','Рекомендуемая, начните с неё'],['general (ALT).bat','ALT','Альтернативная разрезка пакетов'],['general (ALT2).bat','ALT2','Альтернативная разрезка пакетов'],['general (FAKE TLS AUTO).bat','FAKE TLS AUTO','Поддельное TLS-приветствие, часто помогает на мобильном интернете'],['general (SIMPLE FAKE).bat','SIMPLE FAKE','Простые фейковые пакеты']].map(([id,name,desc])=>({id,name,desc})),
-    since:0, user_sites:['rutracker.org','nnmclub.to'], builtin_sites:142, auto_update:true, app_version:'0.11.0', zapret_version:'1.10.4', portable:false, versions:['zapret-discord-youtube 1.10.4 (winws из zapret v72.9)','tg-ws-proxy 1.11.2'] };
+    // Те же 22 стратегии, что в Flowseal 1.10.4, с описаниями как в engine.rs.
+    strategies:['Основная','ALT',...Array.from({ length: 12 }, (_, i) => `ALT${i + 2}`),'EXP','FAKE TLS AUTO','FAKE TLS AUTO ALT','FAKE TLS AUTO ALT2','FAKE TLS AUTO ALT3','SIMPLE FAKE','SIMPLE FAKE ALT','SIMPLE FAKE ALT2'].map(name => ({
+      id: name === 'Основная' ? 'general.bat' : `general (${name}).bat`, name,
+      desc: name === 'Основная' ? 'Рекомендуемая, начните с неё' : name.includes('FAKE TLS') ? 'Поддельное TLS-приветствие, часто помогает на мобильном интернете'
+        : name.includes('SIMPLE FAKE') ? 'Простые фейковые пакеты' : name === 'EXP' ? 'Экспериментальная' : 'Альтернативная разрезка пакетов' })),
+    since:0, user_sites:['rutracker.org','nnmclub.to'], builtin_sites:142, auto_update:true, app_version:'0.12.0', zapret_version:'1.10.4', portable:false, versions:['zapret-discord-youtube 1.10.4 (winws из zapret v72.9)','tg-ws-proxy 1.11.2'] };
   const diag = [
     { id:'bypass', level:'bad', title:'Установлены другие обходы: GoodbyeDPI', detail:'Они перехватывают тот же трафик, что и Prism, и обход перестаёт работать. Prism может удалить их службы.', fix:true },
     { id:'vpn', level:'warn', title:'Работает VPN: OpenVPN Interactive Service', detail:'Некоторые VPN мешают обходу. Если что-то не открывается, выключите VPN.', fix:false },
@@ -38,11 +42,11 @@ const mock = (() => {
       case 'remove_site': st.user_sites = st.user_sites.filter(s => s !== a.domain); break;
       case 'check_services': await wait(900); return { discord:{ok:st.engine_on,ms:120,good:2,total:2,failed:[]}, youtube:{ok:st.engine_on,ms:140,good:2,total:3,failed:['видеосервер']}, telegram:{ok:st.tg_on,ms:1,good:0,total:0,failed:[]}, chatgpt:st.ai };
       case 'auto_pick':
-        for (const s of st.strategies) { emit('pick-progress',{id:s.id,state:'wait',ms:0}); await wait(400); emit('pick-progress',{id:s.id,state:s.id.includes('ALT2')?'bad':'ok',ms:100+Math.round(Math.random()*150)}); }
+        for (const [i, s] of st.strategies.entries()) { emit('pick-progress',{id:s.id,state:'wait',ms:0}); await wait(170); emit('pick-progress',{id:s.id,state:/ALT[259]\)/.test(s.id)?'bad':s.id.includes('SIMPLE')?'part':'ok',ms:90+(i*47)%170}); }
         st.strategy = 'general.bat'; st.engine_on = true; st.since = Date.now(); break;
-      case 'get_log': return '12:00:01 [prism] Prism 0.11.0 запущен\n12:00:03 [prism] запуск стратегии general.bat, игровой режим: false\n12:00:05 [prism] предпросмотр в браузере';
+      case 'get_log': return ['12:00:01 [prism] Prism 0.12.0 запущен', '12:00:01 [prism] установка файлов zapret flowseal-1.10.4', '12:00:02 [prism] запуск стратегии general.bat, игровой режим: false', '12:00:02 [winws] windivert initialized. capture is started.', '12:00:10 [prism] автообновление обходов: Не удалось проверить обновления: тайм-аут', '12:00:12 [prism] предпросмотр в браузере'].join('\n');
       case 'set_auto_update': st.auto_update = a.on; break;
-      case 'check_updates': return { app:{current:'0.11.0',latest:'0.11.1',available:true}, zapret:{current:'1.10.4',latest:'1.10.4',available:false} };
+      case 'check_updates': return { app:{current:'0.12.0',latest:'0.12.1',available:true}, zapret:{current:'1.10.4',latest:'1.10.4',available:false} };
       case 'update_zapret': throw 'У вас уже последняя версия обходов';
       case 'update_app': return null;
       case 'run_diagnostics': await wait(1200); return JSON.parse(JSON.stringify(diag));
@@ -168,18 +172,29 @@ $('#tgData').onclick = e => {
 
 // Стратегии: подбор на главной, ручной выбор в отдельном окне
 const dlg = $('#stratDlg');
-$('#stratOpen').onclick = () => { drawStrats(); dlg.showModal(); };
+// Выбранная стратегия может быть в конце длинного списка: сразу показываем её.
+const showSelected = () => { const o = $('#strats .opt.sel'); if (o) o.scrollIntoView({ block: 'center' }); };
+$('#stratOpen').onclick = () => { drawStrats(); dlg.showModal(); showSelected(); };
 $('#dlgClose').onclick = () => dlg.close();
 dlg.onclick = e => { if (e.target === dlg) dlg.close(); };
 function drawStrats() {
-  $('#strats').innerHTML = S.strategies.map(s => {
+  const opt = (s, solo) => {
     const r = pick[s.id];
     const res = !r ? '' : r.state === 'wait' ? '<span class="res wait">Проверяю…</span>'
       : r.state === 'ok' ? `<span class="res ok">${r.ms} мс</span>`
       : r.state === 'part' ? '<span class="res">Частично</span>' : '<span class="res bad">Не работает</span>';
     const sel = s.id === S.strategy;
-    return `<div class="opt ${sel ? 'sel' : ''}" data-id="${esc(s.id)}" role="radio" tabindex="0" aria-checked="${sel}"><span class="radio"></span><div class="t"><b>${esc(s.name)}</b><span>${esc(s.desc)}</span></div>${res}</div>`;
-  }).join('') || '<p class="dlg-sub">Стратегии не найдены. Переустановите Prism.</p>';
+    return `<div class="opt${sel ? ' sel' : ''}${r && r.state === 'wait' ? ' now' : ''}" data-id="${esc(s.id)}" role="radio" tabindex="0" aria-checked="${sel}"><span class="radio"></span><div class="t"><b>${esc(s.name)}</b>${solo ? `<span>${esc(s.desc)}</span>` : ''}</div>${res}</div>`;
+  };
+  // У стратегий одного семейства одинаковое описание: показываем его один раз над группой.
+  const groups = [];
+  for (const s of S.strategies) {
+    const g = groups.find(x => x.desc === s.desc);
+    if (g) g.items.push(s); else groups.push({ desc: s.desc, items: [s] });
+  }
+  $('#strats').innerHTML = groups.map(g => g.items.length === 1 ? opt(g.items[0], true)
+    : `<div class="og" role="group" aria-label="${esc(g.desc)}"><div class="og-h">${esc(g.desc)}<i>${g.items.length}</i></div>${g.items.map(s => opt(s, false)).join('')}</div>`).join('')
+    || '<p class="dlg-sub">Стратегии не найдены. Переустановите Prism.</p>';
   $$('#strats .opt').forEach(o => o.onclick = o.onkeydown = async e => {
     if (e.key && e.key !== 'Enter' && e.key !== ' ') return;
     if (e.key) e.preventDefault();
@@ -189,9 +204,12 @@ function drawStrats() {
     try { await call('set_strategy', { id: s.id }, `Стратегия «${s.name}» ${S.engine_on ? 'включена' : 'выбрана'}`); } catch {}
     checkSoon();
   });
+  // Во время подбора проверяемая стратегия остаётся на виду.
+  const now = picking && $('#strats .opt.now');
+  if (now) now.scrollIntoView({ block: 'nearest' });
 }
 listen('pick-progress', e => { pick[e.payload.id] = e.payload; render(); });
-$('#pickBtn').onclick = async () => {
+async function autoPick() {
   if (picking || busy || !S) return;
   picking = true;
   for (const k in pick) delete pick[k];
@@ -202,13 +220,17 @@ $('#pickBtn').onclick = async () => {
     toast(`Подобрана стратегия «${s ? s.name : S.strategy}». Обход включён`);
   } catch {}
   picking = false; invalidate(); render(); checkSoon();
-};
+  if (dlg.open) showSelected();
+}
+$('#pickBtn').onclick = autoPick;
+// Подбор можно запустить и из окна стратегий: результаты видны там же по ходу проверки.
+$('#dlgPick').onclick = autoPick;
 
 // Сайты
 function drawSites() {
   const list = S.user_sites;
-  $('#sites').innerHTML = list.map(s => `<div class="row"><div class="t"><b>${esc(s)}</b></div><button class="x" data-del="${esc(s)}" aria-label="Убрать ${esc(s)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('')
-    || '<div class="empty">Здесь пока пусто. Добавьте сайт, который не открывается.</div>';
+  $('#sites').innerHTML = list.map(s => `<div class="row"><span class="mono" aria-hidden="true">${esc(s[0])}</span><div class="t"><b>${esc(s)}</b></div><button class="x" data-del="${esc(s)}" aria-label="Убрать ${esc(s)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('')
+    || '<div class="empty"><span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg></span><div class="t"><b>Здесь пока пусто</b><span>Добавьте сайт, который не открывается</span></div></div>';
   $('#builtin').textContent = `Ещё ${S.builtin_sites} сайтов уже есть во встроенном списке: Discord, YouTube и другие.`;
   $$('[data-del]').forEach(b => b.onclick = () => call('remove_site', { domain: b.dataset.del }, `${b.dataset.del} убран из списка`).catch(() => {}));
 }
@@ -226,10 +248,18 @@ $('#addForm').onsubmit = async e => {
 };
 
 // Журнал: новые строки внизу, поэтому держим прокрутку у конца, если её не сдвигали
+// Строка журнала: время и источник приглушены, сбои выделены целиком.
+function logLine(l) {
+  const m = l.match(/^(\d\d:\d\d:\d\d) (\[[^\]]+\] )?(.*)$/);
+  if (!m) return esc(l);
+  const bad = /не удалось|не запустил|ошибк|неожиданно|завершился с кодом|больше не перезапускается/i.test(m[3]);
+  return `<span${bad ? ' class="le"' : ''}><span class="lt">${m[1]}</span> ${m[2] ? `<span class="lg">${esc(m[2])}</span>` : ''}${esc(m[3])}</span>`;
+}
 async function loadLog() {
   try {
     const el = $('#log'), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 24;
-    el.textContent = (await invoke('get_log')) || 'Пока пусто';
+    const text = await invoke('get_log');
+    el.innerHTML = text ? text.split('\n').map(logLine).join('\n') : 'Пока пусто';
     if (atEnd) el.scrollTop = el.scrollHeight;
   } catch {}
 }
@@ -340,6 +370,7 @@ function render() {
   for (const [id, x] of [['dc', dc], ['yt', yt]]) {
     const row = $(`#svc-${id}`);
     row.className = 'row svc ' + x[0];
+    row.dataset.q = x[2];
     $(`#st-${id}`).textContent = x[1];
   }
   $('#recheck').hidden = !on || busyText || picking;
@@ -354,7 +385,13 @@ function render() {
   pb.textContent = picking ? 'Подбираю…' : 'Подобрать';
   pb.className = 'btn' + (failed.length && !picking ? ' primary' : '');
   pb.disabled = picking || busy || !total;
-  $('#stratOpen').disabled = picking || !total;
+  // Окно стратегий открывается и во время подбора, чтобы следить за результатами.
+  $('#stratOpen').disabled = !total;
+  const dp = $('#dlgPick');
+  dp.textContent = picking ? 'Подбираю…' : 'Подобрать';
+  dp.disabled = picking || busy || !total;
+  $('#dlgSub').textContent = picking ? `Проверяю ${Math.min(done + 1, total)} из ${total}. Результаты появляются по ходу проверки.`
+    : 'Провайдеры блокируют по-разному. Не знаете, какую выбрать? Prism проверит все и включит самую быструю.';
   if (dlg.open) drawStrats();
 
   // Модули
@@ -371,6 +408,7 @@ function render() {
   $('#gmItem').classList.toggle('is-on', S.games);
   $('#aiItem').classList.toggle('is-on', S.ai);
   $('#asRow').classList.toggle('is-on', S.autostart);
+  for (const m of ['autostart', 'tray', 'auto_update']) $$(`#p-set .sw[data-mod="${m}"]`).forEach(s => s.parentElement.classList.toggle('is-on', modVal[m]()));
   $$('.asSub').forEach(el => el.textContent = S.autostart ? 'Включится сам при запуске Windows' : 'Включать обход при запуске Windows');
   $('#aiSub').textContent = S.ai ? 'Работают без VPN, даже когда Prism закрыт'
     : 'ChatGPT, Gemini, Claude и другие без VPN';
