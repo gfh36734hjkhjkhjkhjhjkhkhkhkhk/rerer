@@ -43,12 +43,36 @@ impl Settings {
             .unwrap_or_default()
     }
 
+    /// Сохранить через временный файл: если Prism закроется посреди записи,
+    /// старые настройки (и секрет прокси, уже добавленного в Telegram) не пропадут.
     pub fn save(&self, path: &Path) {
         if let Some(dir) = path.parent() {
             let _ = fs::create_dir_all(dir);
         }
-        if let Ok(t) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(path, t);
+        let Ok(text) = serde_json::to_string_pretty(self) else { return };
+        let tmp = path.with_extension("json.tmp");
+        if fs::write(&tmp, text).is_ok() && fs::rename(&tmp, path).is_err() {
+            let _ = fs::remove_file(&tmp);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saves_and_loads() {
+        let dir = std::env::temp_dir().join(format!("prism-settings-test-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let s = Settings { tg_secret: "ab".repeat(16), games: true, ..Settings::default() };
+        s.save(&path);
+        // Повторное сохранение заменяет файл, временный файл не остаётся.
+        s.save(&path);
+        let back = Settings::load(&path);
+        assert_eq!(back.tg_secret, s.tg_secret);
+        assert!(back.games);
+        assert!(!path.with_extension("json.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

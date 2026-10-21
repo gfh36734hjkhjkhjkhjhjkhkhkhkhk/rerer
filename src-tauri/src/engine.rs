@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -145,11 +146,35 @@ pub fn parse_bat(text: &str, paths: &ZapretPaths, games: bool) -> Result<Vec<Str
         .replace("%GameFilterTCP%", range)
         .replace("%GameFilterUDP%", range)
         .replace("%GameFilter%", range);
-    if joined.contains('%') {
-        return Err("В стратегии осталась неизвестная переменная".into());
+    if let Some(var) = leftover_var(&joined) {
+        return Err(format!("В стратегии осталась неизвестная переменная {var}"));
     }
     let args = tokenize(&joined);
     Ok(if games { games_ipset(args, paths) } else { args })
+}
+
+/// Первая неподставленная переменная вида %NAME% (или одиночный знак процента).
+fn leftover_var(s: &str) -> Option<String> {
+    let rest = &s[s.find('%')? + 1..];
+    Some(match rest.find('%') {
+        Some(end) if end > 0 && !rest[..end].contains(char::is_whitespace) => format!("%{}%", &rest[..end]),
+        _ => "%".into(),
+    })
+}
+
+/// Стратегии, которые не удаётся разобрать: (файл, причина). Проверяется перед
+/// обновлением, чтобы новая версия Flowseal с незнакомым форматом не сломала обход.
+pub fn broken_strategies(paths: &ZapretPaths) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for s in list_strategies(paths) {
+        let parsed = fs::read_to_string(paths.strategies().join(&s.id))
+            .map_err(|e| e.to_string())
+            .and_then(|text| parse_bat(&text, paths, false).and_then(|_| parse_bat(&text, paths, true)));
+        if let Err(e) = parsed {
+            out.push((s.id, e));
+        }
+    }
+    out
 }
 
 /// Полный список подсетей от Flowseal (в его service.bat это «IPSet: loaded»).
@@ -180,7 +205,7 @@ fn games_ipset(args: Vec<String>, paths: &ZapretPaths) -> Vec<String> {
     let mut out = Vec::new();
     for mut g in groups {
         let game = g.iter().any(|a| a == "--filter-tcp=1024-65535" || a == "--filter-udp=1024-65535");
-        if game && g.iter().any(|a| *a == stub) {
+        if game && g.contains(&stub) {
             for a in g.iter_mut() {
                 if *a == stub {
                     *a = full.clone();
@@ -252,6 +277,9 @@ pub struct Engine {
     child: Option<Child>,
     /// Когда обход включился. Перезапуск со сменой стратегии время не сбрасывает.
     since: Option<std::time::SystemTime>,
+    /// Когда запущен текущий процесс winws.exe: по этому времени сторож
+    /// отличает падение посреди работы от стратегии, которая не стартует.
+    started: Option<Instant>,
 }
 
 impl Engine {
@@ -287,7 +315,22 @@ impl Engine {
         }
         self.child = Some(child);
         self.since = Some(keep.unwrap_or_else(std::time::SystemTime::now));
+        self.started = Some(Instant::now());
         Ok(())
+    }
+
+    /// Код выхода, если winws.exe завершился сам, а не через stop():
+    /// упал или его закрыл антивирус.
+    pub fn exited(&mut self) -> Option<i32> {
+        match self.child.as_mut()?.try_wait() {
+            Ok(Some(status)) => Some(status.code().unwrap_or(-1)),
+            _ => None,
+        }
+    }
+
+    /// Сколько работает текущий процесс winws.exe.
+    pub fn uptime(&self) -> Duration {
+        self.started.map(|t| t.elapsed()).unwrap_or_default()
     }
 
     /// Работает ли процесс движка прямо сейчас.
@@ -315,6 +358,7 @@ impl Engine {
             let _ = c.wait();
         }
         self.since = None;
+        self.started = None;
     }
 }
 
@@ -329,7 +373,13 @@ pub fn install(resource: &Path, target: &Path, log: &Log) -> Result<(), String> 
         return Ok(());
     }
     kill_stray();
+    unload_driver();
     log.push(format!("[prism] установка файлов zapret {}", src_ver.trim()));
+    // Программы и стратегии заменяются целиком: Flowseal переименовывает и удаляет
+    // стратегии, и старые файлы не должны оставаться в списке.
+    for dir in ["bin", "strategies"] {
+        let _ = fs::remove_dir_all(target.join(dir));
+    }
     copy_dir(resource, target).map_err(|e| format!("Не удалось скопировать файлы zapret: {e}"))
 }
 
@@ -374,7 +424,7 @@ mod tests {
         let p = ZapretPaths { root: PathBuf::from("C:\\Data\\Prism Dir\\zapret") };
         let args = parse_bat(bat, &p, false).unwrap();
         assert_eq!(args[0], "--wf-tcp=80,443,12");
-        assert_eq!(args[2].contains("Prism Dir"), true);
+        assert!(args[2].contains("Prism Dir"));
         assert!(args[2].ends_with("list-general.txt"));
         assert_eq!(args.last().unwrap(), "--filter-tcp=80");
         assert_eq!(tokenize("--fake-tls=^! --x=\"a b\""), vec!["--fake-tls=!", "--x=a b"]);
@@ -388,5 +438,27 @@ mod tests {
         assert_eq!(a[8], "--new");
         let off = parse_bat(game, &p, false).unwrap();
         assert!(off.iter().all(|x| !x.contains(GAMES_IPSET) && !x.contains(GAMES_EXCLUDE)));
+    }
+
+    #[test]
+    fn names_unknown_variable() {
+        let p = ZapretPaths { root: PathBuf::from("C:\\z") };
+        let bat = "\"%BIN%winws.exe\" --wf-tcp=80,%NewFilter% --dpi-desync=fake\r\n";
+        assert_eq!(parse_bat(bat, &p, false).unwrap_err(), "В стратегии осталась неизвестная переменная %NewFilter%");
+        assert_eq!(leftover_var("--x=50% off"), Some("%".into()));
+        assert_eq!(leftover_var("--x=1"), None);
+    }
+
+    /// В CI сюда скачиваются стратегии Flowseal, которые попадут в сборку:
+    /// каждая должна разбираться и в обычном, и в игровом режиме.
+    #[test]
+    fn parses_bundled_strategies() {
+        let paths = ZapretPaths { root: Path::new(env!("CARGO_MANIFEST_DIR")).join("resources").join("zapret") };
+        if !paths.strategies().exists() {
+            eprintln!("нет resources/zapret, проверка стратегий Flowseal пропущена");
+            return;
+        }
+        assert!(list_strategies(&paths).iter().any(|s| s.id == "general.bat"));
+        assert_eq!(broken_strategies(&paths), Vec::<(String, String)>::new());
     }
 }
